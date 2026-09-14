@@ -1,0 +1,49 @@
+services:
+  api:
+    build: .
+    ports:
+      - "${PORT}:${PORT}"
+    volumes:
+      - uploads_data:/app/uploads
+    environment:
+      - DATABASE_URL=postgres://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}?sslmode=disable
+      - REDIS_URL=redis://cache:6379/0
+      - PORT=${PORT}
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+    labels:
+      - "traefik.http.services.http-0-g10mba4ol2guig7hudrzihuz-api-8a5d.loadbalancer.server.port=3030"
+      - "traefik.http.services.https-0-g10mba4ol2guig7hudrzihuz-api-8a5d.loadbalancer.server.port=3030"
+    depends_on:
+      - db
+      - cache
+    networks:
+      - default
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=${DB_NAME}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - default
+
+  cache:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    networks:
+      - default
+
+volumes:
+  postgres_data:
+  redis_data:
+  uploads_data:
+
+networks:
+  default:

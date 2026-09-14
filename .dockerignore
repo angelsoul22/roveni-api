@@ -1,0 +1,14 @@
+# Ignorar binarios locales
+api
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Ignorar directorios de desarrollo pesados u ocultos
+.git
+.idea
+.vscode
+.DS_Store
