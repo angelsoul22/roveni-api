@@ -105,7 +105,7 @@ func GenerateSingleTicketPDF(data TicketPDFData) (string, error) {
 	pdf.Rect(0, 0, 210, 18, "F")
 
 	// --- LOGO ENGINE DEFENSA ---
-	logoPath := filepath.Join("uploads", "logos", "logoAP.png")
+	logoPath := filepath.Join("uploads", "logos", "logoR.png")
 	if _, err := os.Stat(logoPath); err == nil {
 		// Alto en 0 para auto-escalado proporcional
 		pdf.ImageOptions(logoPath, 12, 4, 35, 0, false, gofpdf.ImageOptions{ImageType: "PNG"}, 0, "")

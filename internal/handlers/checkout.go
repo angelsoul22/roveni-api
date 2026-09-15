@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"math/rand"
 	"net/http"
 	"os"
 	"strings"
@@ -25,6 +24,27 @@ import (
 )
 
 // isZeroDecimalCurrency checks if currency is zero-decimal in Stripe API
+func generateNextOrderNumber(db *sql.DB) string {
+	var maxNum int
+	err := db.QueryRow(`
+		SELECT COALESCE(
+			MAX(
+				CASE 
+					WHEN order_number ~ '^RV-[0-9]+$' 
+					THEN CAST(SUBSTRING(order_number FROM 4) AS INTEGER) 
+					ELSE id 
+				END
+			), 
+			0
+		) FROM purchases
+	`).Scan(&maxNum)
+	if err != nil || maxNum < 0 {
+		maxNum = 0
+	}
+	nextVal := maxNum + 1
+	return fmt.Sprintf("RV-%06d", nextVal)
+}
+
 func isZeroDecimalCurrency(currency string) bool {
 	c := strings.ToUpper(strings.TrimSpace(currency))
 	switch c {
@@ -217,9 +237,8 @@ func CreatePaymentIntentHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc 
 		serviceFee := subtotalTarget * feeRate
 		totalAmount := subtotalTarget + serviceFee
 
-		// Generate random unique Order Number AP-XXXXXX
-		rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
-		orderNumber := fmt.Sprintf("AP-%06d", rnd.Intn(1000000))
+		// Generate consecutive Order Number RV-XXXXXX
+		orderNumber := generateNextOrderNumber(db)
 
 		// Stripe Secret Key setup from environment
 		stripeKey := os.Getenv("STRIPE_SECRET_KEY")
@@ -913,8 +932,7 @@ func CreateCheckoutSessionHandler(db *sql.DB) http.HandlerFunc {
 		stripeKey := os.Getenv("STRIPE_SECRET_KEY")
 
 		stripe.Key = stripeKey
-		rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
-		orderNumber := fmt.Sprintf("AP-%06d", rnd.Intn(1000000))
+		orderNumber := generateNextOrderNumber(db)
 		successURL := strings.ReplaceAll(req.SuccessURL, "{ORDER_NUMBER}", orderNumber)
 		params := &stripe.CheckoutSessionParams{
 			LineItems:  lineItems,

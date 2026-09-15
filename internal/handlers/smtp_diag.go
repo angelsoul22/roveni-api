@@ -22,7 +22,7 @@ func TestSMTPHandler() http.HandlerFunc {
 		testData := mailer.EmailData{
 			To:           toEmail,
 			CustomerName: "Prueba Sistema Roveni",
-			OrderNumber:  "AP-TEST-001",
+			OrderNumber:  "RV-000001",
 			EventName:    "Evento de Prueba SMTP",
 			EventDate:    "2026-08-30",
 			ShowTime:     "20:00",

@@ -23,6 +23,9 @@ func loadEnv() {
 	}
 
 	if target == "" {
+		if os.Getenv("DATABASE_URL") != "" || os.Getenv("PORT") != "" {
+			return
+		}
 		fmt.Println("[ENV NOTICE] No local .env file found. Using system/container environment variables.")
 		return
 	}
