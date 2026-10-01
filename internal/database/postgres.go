@@ -78,6 +78,18 @@ func createTables(db *sql.DB) error {
 		return fmt.Errorf("error adding role constraint: %w", err)
 	}
 
+	// Create user_sessions table for 100% session persistence across server restarts
+	if _, err := db.Exec(`
+	CREATE TABLE IF NOT EXISTS user_sessions (
+		id TEXT PRIMARY KEY,
+		user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		created_at TIMESTAMPTZ DEFAULT now(),
+		expires_at TIMESTAMPTZ NOT NULL
+	)
+	`); err != nil {
+		return fmt.Errorf("error creating user_sessions table: %w", err)
+	}
+
 	// Create customer_profiles table for buyers
 	if _, err := db.Exec(`
 	CREATE TABLE IF NOT EXISTS customer_profiles (
@@ -261,5 +273,94 @@ func createTables(db *sql.DB) error {
 		WHERE tc.id = sub.ticket_category_id AND tc.capacity < sub.total_sold;
 	`)
 
-	return nil
+	return createSeatsTables(db)
 }
+
+func createSeatsTables(db *sql.DB) error {
+	// 1. seats table (venue master layout)
+	if _, err := db.Exec(`
+	CREATE TABLE IF NOT EXISTS seats (
+		id SERIAL PRIMARY KEY,
+		venue_name TEXT NOT NULL DEFAULT 'Auditorio Charles Chaplin',
+		row_label TEXT NOT NULL,
+		seat_number INTEGER NOT NULL,
+		block TEXT NOT NULL DEFAULT 'IZQ',
+		is_wheelchair BOOLEAN DEFAULT FALSE,
+		UNIQUE (venue_name, row_label, seat_number)
+	);
+	`); err != nil {
+		return fmt.Errorf("error creating seats table: %w", err)
+	}
+
+	// 2. event_seats table (seat status per event)
+	if _, err := db.Exec(`
+	CREATE TABLE IF NOT EXISTS event_seats (
+		id SERIAL PRIMARY KEY,
+		event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+		seat_id INTEGER NOT NULL REFERENCES seats(id) ON DELETE CASCADE,
+		ticket_category_id INTEGER REFERENCES ticket_categories(id) ON DELETE SET NULL,
+		status TEXT NOT NULL DEFAULT 'available' CHECK (status IN ('available', 'held', 'sold')),
+		locked_until TIMESTAMPTZ,
+		session_id TEXT DEFAULT '',
+		purchase_id INTEGER REFERENCES purchases(id) ON DELETE SET NULL,
+		created_at TIMESTAMPTZ DEFAULT now(),
+		UNIQUE (event_id, seat_id)
+	);
+	`); err != nil {
+		return fmt.Errorf("error creating event_seats table: %w", err)
+	}
+
+	// 3. Add seat tracking columns to purchase_items
+	_, _ = db.Exec(`
+		ALTER TABLE purchase_items ADD COLUMN IF NOT EXISTS seat_id INTEGER REFERENCES seats(id) ON DELETE SET NULL;
+		ALTER TABLE purchase_items ADD COLUMN IF NOT EXISTS seat_label TEXT DEFAULT '';
+	`)
+
+	// 4. Seed master seating layout for Auditorio Charles Chaplin
+	return seedAuditorioCharlesChaplin(db)
+}
+
+func seedAuditorioCharlesChaplin(db *sql.DB) error {
+	var count int
+	err := db.QueryRow("SELECT COUNT(*) FROM seats WHERE venue_name = 'Auditorio Charles Chaplin'").Scan(&count)
+	if err == nil && count >= 672 { // 24 rows * 28 seats = 672 seats
+		return nil
+	}
+
+	fmt.Println("[SEEDS] Generando mapa maestro de asientos para Auditorio Charles Chaplin (Filas A-X, Asientos 1-28)...")
+	rows := []string{"A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"}
+	wheelchairRows := map[string]bool{"F": true, "J": true, "K": true, "O": true, "P": true, "W": true}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO seats (venue_name, row_label, seat_number, block, is_wheelchair)
+		VALUES ('Auditorio Charles Chaplin', $1, $2, $3, $4)
+		ON CONFLICT (venue_name, row_label, seat_number) DO NOTHING
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, row := range rows {
+		isWcRow := wheelchairRows[row]
+		for s := 1; s <= 28; s++ {
+			block := "IZQ"
+			if s > 14 {
+				block = "DER"
+			}
+			isWc := isWcRow && (s == 1 || s == 2 || s == 27 || s == 28)
+			if _, err := stmt.Exec(row, s, block, isWc); err != nil {
+				return err
+			}
+		}
+	}
+
+	return tx.Commit()
+}
+

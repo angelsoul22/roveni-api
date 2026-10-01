@@ -75,6 +75,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer db.Close()
+	handlers.SetGlobalDB(db)
 
 	rdb, err := cache.InitRedis()
 	if err != nil || rdb == nil {
@@ -99,7 +100,7 @@ func main() {
 	mux.HandleFunc("/public/users/login", handlers.LoginUserHandler(db, rdb))
 	mux.HandleFunc("/session", handlers.SessionOrganizerHandler(db, rdb))
 	mux.HandleFunc("/organizers/me", handlers.SessionOrganizerHandler(db, rdb))
-	mux.HandleFunc("/organizers/logout", handlers.LogoutOrganizerHandler(rdb))
+	mux.HandleFunc("/organizers/logout", handlers.LogoutOrganizerHandler(db, rdb))
 	mux.HandleFunc("/users/list", handlers.ListUsersHandler(db, rdb))
 	mux.HandleFunc("/organizers/list", handlers.ListUsersHandler(db, rdb))
 	mux.HandleFunc("/users/me", handlers.GetMeHandler(db, rdb))
@@ -115,7 +116,10 @@ func main() {
 	mux.HandleFunc("/public/events/list", handlers.PublicListEventsHandler(db))
 	mux.HandleFunc("/public/events/detail", handlers.PublicEventDetailHandler(db))
 	mux.HandleFunc("/public/events/calendar.ics", handlers.GetEventICSHandler(db))
+	mux.HandleFunc("/public/events/seats", handlers.GetEventSeatsHandler(db))
 
+	mux.HandleFunc("/public/checkout/hold-seats", handlers.HoldSeatsHandler(db))
+	mux.HandleFunc("/public/checkout/release-seats", handlers.ReleaseSeatsHandler(db))
 	mux.HandleFunc("/public/checkout/create-intent", handlers.CreatePaymentIntentHandler(db, rdb))
 	mux.HandleFunc("/public/checkout/confirm", handlers.ConfirmCheckoutHandler(db, rdb))
 	mux.HandleFunc("/public/checkout/create-session", handlers.CreateCheckoutSessionHandler(db))
@@ -138,22 +142,29 @@ func main() {
 	}
 	port := ":" + portStr
 
-	// Middleware de CORS dinámico corregido
+	// Middleware de CORS totalmente abierto (Sin candados ni restricciones)
 	corsHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
 
-		// Reflejar el origen exacto del cliente para permitir cookies/tokens
 		if origin != "" {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
 		} else {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 		}
 
-		w.Header().Set("Access-Control-Allow-Credentials", "true")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Roveni-Session, x-roveni-session, X-AltumPass-Session, x-altumpass-session, Accept, Origin, X-Requested-With")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE")
+		reqHeaders := r.Header.Get("Access-Control-Request-Headers")
+		if reqHeaders != "" {
+			w.Header().Set("Access-Control-Allow-Headers", reqHeaders)
+		} else {
+			w.Header().Set("Access-Control-Allow-Headers", "*")
+		}
 
-		// Responder inmediatamente a las peticiones Preflight (OPTIONS)
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE, PATCH, HEAD")
+		w.Header().Set("Access-Control-Expose-Headers", "*")
+		w.Header().Set("Access-Control-Max-Age", "86400")
+
+		// Responder inmediatamente 200 OK a Preflight (OPTIONS)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return

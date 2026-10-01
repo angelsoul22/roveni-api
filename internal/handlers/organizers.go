@@ -20,12 +20,42 @@ import (
 )
 
 var fallbackSessions sync.Map
+var globalDB *sql.DB
 
-func setSessionStore(rdb *redis.Client, sessionID string, userID int64, ttl time.Duration) error {
-	fallbackSessions.Store(sessionID, fmt.Sprintf("%d", userID))
-	if rdb != nil {
-		_ = rdb.Set(context.Background(), "session:"+sessionID, fmt.Sprintf("%d", userID), ttl).Err()
+func SetGlobalDB(db *sql.DB) {
+	globalDB = db
+}
+
+func setSessionStore(rdb *redis.Client, db *sql.DB, sessionID string, userID int64, ttl time.Duration) error {
+	if sessionID == "" || userID <= 0 {
+		return fmt.Errorf("invalid session parameters")
 	}
+
+	userIDStr := fmt.Sprintf("%d", userID)
+	fallbackSessions.Store(sessionID, userIDStr)
+
+	if rdb != nil {
+		_ = rdb.Set(context.Background(), "session:"+sessionID, userIDStr, ttl).Err()
+	}
+
+	targetDB := db
+	if targetDB == nil {
+		targetDB = globalDB
+	}
+
+	if targetDB != nil {
+		expiresAt := time.Now().Add(ttl)
+		_, err := targetDB.Exec(`
+			INSERT INTO user_sessions (id, user_id, expires_at)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (id) DO UPDATE
+			SET user_id = EXCLUDED.user_id, expires_at = EXCLUDED.expires_at
+		`, sessionID, userID, expiresAt)
+		if err != nil {
+			fmt.Printf("[SESSION PERSISTENCE WARNING] Could not insert user_session into DB: %v\n", err)
+		}
+	}
+
 	return nil
 }
 
@@ -55,24 +85,52 @@ func extractSessionID(r *http.Request) string {
 	return ""
 }
 
-func getSessionStore(rdb *redis.Client, sessionID string) (string, error) {
+func getSessionStore(rdb *redis.Client, db *sql.DB, sessionID string) (string, error) {
 	if sessionID == "" {
 		return "", fmt.Errorf("empty session id")
 	}
+
+	// 1. Try Redis first
 	if rdb != nil {
 		val, err := rdb.Get(context.Background(), "session:"+sessionID).Result()
 		if err == nil && val != "" {
 			return val, nil
 		}
 	}
+
+	// 2. Try RAM fallback
 	val, ok := fallbackSessions.Load(sessionID)
-	if !ok {
-		return "", fmt.Errorf("session not found")
+	if ok && val != nil && val.(string) != "" {
+		return val.(string), nil
 	}
-	return val.(string), nil
+
+	// 3. Try PostgreSQL DB persistence
+	targetDB := db
+	if targetDB == nil {
+		targetDB = globalDB
+	}
+
+	if targetDB != nil {
+		var userID int64
+		err := targetDB.QueryRow(`
+			SELECT user_id 
+			FROM user_sessions 
+			WHERE id = $1 AND expires_at > NOW()
+		`, sessionID).Scan(&userID)
+		if err == nil && userID > 0 {
+			userIDStr := fmt.Sprintf("%d", userID)
+			fallbackSessions.Store(sessionID, userIDStr)
+			if rdb != nil {
+				_ = rdb.Set(context.Background(), "session:"+sessionID, userIDStr, 72*time.Hour).Err()
+			}
+			return userIDStr, nil
+		}
+	}
+
+	return "", fmt.Errorf("session not found or expired")
 }
 
-func deleteSessionStore(rdb *redis.Client, sessionID string) {
+func deleteSessionStore(rdb *redis.Client, db *sql.DB, sessionID string) {
 	if sessionID == "" {
 		return
 	}
@@ -80,6 +138,15 @@ func deleteSessionStore(rdb *redis.Client, sessionID string) {
 		_ = rdb.Del(context.Background(), "session:"+sessionID).Err()
 	}
 	fallbackSessions.Delete(sessionID)
+
+	targetDB := db
+	if targetDB == nil {
+		targetDB = globalDB
+	}
+
+	if targetDB != nil {
+		_, _ = targetDB.Exec("DELETE FROM user_sessions WHERE id = $1", sessionID)
+	}
 }
 
 type AuthUser struct {
@@ -91,14 +158,14 @@ type AuthUser struct {
 }
 
 // GetAuthenticatedUser extrae el token de sesión (Cookie, Bearer, X-AltumPass-Session, query param),
-// consulta Redis y obtiene el usuario autenticado de la base de datos.
+// consulta Redis/DB y obtiene el usuario autenticado de la base de datos.
 func GetAuthenticatedUser(r *http.Request, db *sql.DB, rdb *redis.Client) (*AuthUser, error) {
 	sessionID := extractSessionID(r)
 	if sessionID == "" {
 		return nil, fmt.Errorf("no session provided")
 	}
 
-	userIDStr, err := getSessionStore(rdb, sessionID)
+	userIDStr, err := getSessionStore(rdb, db, sessionID)
 	if err != nil || userIDStr == "" {
 		return nil, fmt.Errorf("invalid or expired session")
 	}
@@ -342,7 +409,7 @@ func LoginOrganizerHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 		// Create session with nil-safe session store
 		sessionID := uuid.NewString()
 		ttl := 30 * 24 * time.Hour
-		_ = setSessionStore(rdb, sessionID, org.ID, ttl)
+		_ = setSessionStore(rdb, db, sessionID, org.ID, ttl)
 
 		isSecure := os.Getenv("ENV") == "production" || r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 		sameSiteMode := http.SameSiteLaxMode
@@ -386,7 +453,7 @@ func SessionOrganizerHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 			return
 		}
 
-		val, err := getSessionStore(rdb, sessionID)
+		val, err := getSessionStore(rdb, db, sessionID)
 		if err != nil {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid session"})
 			return
@@ -397,9 +464,9 @@ func SessionOrganizerHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 
 		err = db.QueryRow(`
 			SELECT u.id, 
-				COALESCE(op.full_name, ''), 
+				COALESCE(op.full_name, cp.full_name, u.email), 
 				u.email, 
-				COALESCE(op.phone, ''), 
+				COALESCE(op.phone, cp.phone, ''), 
 				COALESCE(op.category, ''), 
 				COALESCE(op.city, ''), 
 				u.role, 
@@ -410,6 +477,7 @@ func SessionOrganizerHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 				u.password_hash
 			FROM users u
 			LEFT JOIN organizer_profiles op ON op.user_id = u.id
+			LEFT JOIN customer_profiles cp ON cp.user_id = u.id
 			WHERE u.id = $1
 		`, val).Scan(
 			&org.ID, &org.FullName, &org.Email, &org.Phone, &org.Category, &org.City,
@@ -426,11 +494,11 @@ func SessionOrganizerHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 }
 
 // LogoutOrganizerHandler elimina sesión
-func LogoutOrganizerHandler(rdb *redis.Client) http.HandlerFunc {
+func LogoutOrganizerHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID := extractSessionID(r)
 		if sessionID != "" {
-			deleteSessionStore(rdb, sessionID)
+			deleteSessionStore(rdb, db, sessionID)
 		}
 		expired := &http.Cookie{
 			Name:     "roveni_session",
@@ -532,7 +600,7 @@ func ListUsersHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 			return
 		}
 
-		userIDStr, err := getSessionStore(rdb, sessionID)
+		userIDStr, err := getSessionStore(rdb, db, sessionID)
 		if err != nil {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "session expired"})
 			return

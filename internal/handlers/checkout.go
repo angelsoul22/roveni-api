@@ -395,12 +395,12 @@ func ConfirmCheckoutHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 		log.Printf("[SECURITY SUCCESS] Verified Stripe PaymentIntent %s status 'succeeded' with amount %d %s!", pi.ID, pi.AmountReceived, pi.Currency)
 
 		// Query Event details for email and confirmation summary
-		var eventName, eventDate, doorsOpenTime, showTime, venueAddress, city, country string
+		var eventName, eventImage, eventDate, doorsOpenTime, showTime, venueAddress, city, country string
 		err := db.QueryRow(`
-			SELECT name, event_date, doors_open_time, show_start_time, venue_address, city, country 
+			SELECT name, COALESCE(image_url, ''), event_date, doors_open_time, show_start_time, venue_address, city, country 
 			FROM events 
 			WHERE id = $1
-		`, req.EventID).Scan(&eventName, &eventDate, &doorsOpenTime, &showTime, &venueAddress, &city, &country)
+		`, req.EventID).Scan(&eventName, &eventImage, &eventDate, &doorsOpenTime, &showTime, &venueAddress, &city, &country)
 
 		if err != nil {
 			log.Printf("[CONFIRM ERROR] Querying event %d failed: %v", req.EventID, err)
@@ -578,7 +578,7 @@ func ConfirmCheckoutHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 
 		pdfPaths, pdfErr := tickets.GenerateAllTicketsForOrder(
 			req.OrderNumber, req.CustomerName, req.CustomerEmail,
-			eventName, venueAddress, city, country,
+			eventName, eventImage, venueAddress, city, country,
 			eventDate, doorsOpenTime, showTime, pdfTicketList,
 		)
 		if pdfErr != nil {
@@ -645,12 +645,12 @@ func DownloadTicketsPDFHandler(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		var eventName, eventDate, doorsOpenTime, showStartTime, venueAddress, city, country string
+		var eventName, eventImage, eventDate, doorsOpenTime, showStartTime, venueAddress, city, country string
 		err = db.QueryRow(`
-			SELECT name, event_date, doors_open_time, show_start_time, venue_address, city, country 
+			SELECT name, COALESCE(image_url, ''), event_date, doors_open_time, show_start_time, venue_address, city, country 
 			FROM events 
 			WHERE id = $1
-		`, eventID).Scan(&eventName, &eventDate, &doorsOpenTime, &showStartTime, &venueAddress, &city, &country)
+		`, eventID).Scan(&eventName, &eventImage, &eventDate, &doorsOpenTime, &showStartTime, &venueAddress, &city, &country)
 
 		if err != nil {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Evento no encontrado"})
@@ -696,7 +696,7 @@ func DownloadTicketsPDFHandler(db *sql.DB) http.HandlerFunc {
 
 		pdfPaths, err := tickets.GenerateAllTicketsForOrder(
 			orderNumber, customerName, customerEmail,
-			eventName, venueAddress, city, country,
+			eventName, eventImage, venueAddress, city, country,
 			eventDate, doorsOpenTime, showStartTime, pdfTicketList,
 		)
 
@@ -755,12 +755,12 @@ func DownloadTicketsZipHandler(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		var eventName, venueAddress, city, country, eventDate, doorsOpenTime, showStartTime string
+		var eventName, eventImage, venueAddress, city, country, eventDate, doorsOpenTime, showStartTime string
 		err = db.QueryRow(`
-			SELECT name, venue_address, city, country, event_date, doors_open_time, show_start_time 
+			SELECT name, COALESCE(image_url, ''), venue_address, city, country, event_date, doors_open_time, show_start_time 
 			FROM events 
 			WHERE id = $1
-		`, eventID).Scan(&eventName, &venueAddress, &city, &country, &eventDate, &doorsOpenTime, &showStartTime)
+		`, eventID).Scan(&eventName, &eventImage, &venueAddress, &city, &country, &eventDate, &doorsOpenTime, &showStartTime)
 
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "error al obtener evento"})
@@ -805,7 +805,7 @@ func DownloadTicketsZipHandler(db *sql.DB) http.HandlerFunc {
 
 		pdfPaths, err := tickets.GenerateAllTicketsForOrder(
 			orderNumber, customerName, customerEmail,
-			eventName, venueAddress, city, country,
+			eventName, eventImage, venueAddress, city, country,
 			eventDate, doorsOpenTime, showStartTime, pdfTicketList,
 		)
 

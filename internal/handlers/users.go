@@ -92,7 +92,7 @@ func RegisterCustomerHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 		// Create session
 		sessionID := uuid.NewString()
 		ttl := 30 * 24 * time.Hour
-		_ = setSessionStore(rdb, sessionID, userID, ttl)
+		_ = setSessionStore(rdb, db, sessionID, userID, ttl)
 
 		isSecure := os.Getenv("ENV") == "production" || r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 		sameSiteMode := http.SameSiteLaxMode
@@ -181,7 +181,7 @@ func LoginUserHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 
 		sessionID := uuid.NewString()
 		ttl := 30 * 24 * time.Hour
-		_ = setSessionStore(rdb, sessionID, userID, ttl)
+		_ = setSessionStore(rdb, db, sessionID, userID, ttl)
 
 		isSecure := os.Getenv("ENV") == "production" || r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 		sameSiteMode := http.SameSiteLaxMode
@@ -243,7 +243,7 @@ func LogoutUserHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID := extractSessionID(r)
 		if sessionID != "" {
-			deleteSessionStore(rdb, sessionID)
+			deleteSessionStore(rdb, db, sessionID)
 		}
 
 		cookieClear := &http.Cookie{
@@ -296,7 +296,7 @@ func GetMyTicketsHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 		// Option A: Logged-in session via Cookie, Bearer or Custom Header
 		sessionID := extractSessionID(r)
 		if sessionID != "" {
-			userIDStr, sErr := getSessionStore(rdb, sessionID)
+			userIDStr, sErr := getSessionStore(rdb, db, sessionID)
 			if sErr == nil {
 				userID, _ := strconv.ParseInt(userIDStr, 10, 64)
 				_ = db.QueryRow("SELECT email FROM users WHERE id = $1", userID).Scan(&userEmail)
