@@ -159,6 +159,7 @@ func createTables(db *sql.DB) error {
 	ALTER TABLE events ADD COLUMN IF NOT EXISTS instagram_url TEXT DEFAULT '';
 	ALTER TABLE events ADD COLUMN IF NOT EXISTS tiktok_url TEXT DEFAULT '';
 	ALTER TABLE events ADD COLUMN IF NOT EXISTS service_fee_percentage NUMERIC(5, 2) DEFAULT 20.00;
+	ALTER TABLE events ADD COLUMN IF NOT EXISTS courtesy_quota INTEGER DEFAULT 0;
 	`); err != nil {
 		return fmt.Errorf("error creating events table: %w", err)
 	}
@@ -197,6 +198,8 @@ func createTables(db *sql.DB) error {
 		exchange_rate NUMERIC(12, 6) DEFAULT 1.0,
 		stripe_payment_intent_id TEXT DEFAULT '',
 		status TEXT NOT NULL DEFAULT 'completed',
+		is_courtesy BOOLEAN DEFAULT FALSE,
+		courtesy_note TEXT DEFAULT '',
 		created_at TIMESTAMPTZ DEFAULT now()
 	);
 	ALTER TABLE purchases ADD COLUMN IF NOT EXISTS subtotal NUMERIC(12, 2) DEFAULT 0.00;
@@ -206,6 +209,8 @@ func createTables(db *sql.DB) error {
 	ALTER TABLE purchases ADD COLUMN IF NOT EXISTS total_amount_usd NUMERIC(12, 2) DEFAULT 0.00;
 	ALTER TABLE purchases ADD COLUMN IF NOT EXISTS event_currency TEXT DEFAULT 'USD';
 	ALTER TABLE purchases ADD COLUMN IF NOT EXISTS exchange_rate NUMERIC(12, 6) DEFAULT 1.0;
+	ALTER TABLE purchases ADD COLUMN IF NOT EXISTS is_courtesy BOOLEAN DEFAULT FALSE;
+	ALTER TABLE purchases ADD COLUMN IF NOT EXISTS courtesy_note TEXT DEFAULT '';
 	`); err != nil {
 		return fmt.Errorf("error creating purchases table: %w", err)
 	}

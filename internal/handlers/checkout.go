@@ -96,6 +96,7 @@ type ConfirmCheckoutRequest struct {
 	Currency              string             `json:"currency"`
 	ExchangeRate          float64            `json:"exchange_rate"`
 	Tickets               []TicketOrderInput `json:"tickets"`
+	SeatIDs               []int64            `json:"seat_ids,omitempty"`
 }
 
 // CreatePaymentIntentHandler validates ticket availability, calculates totals in the requested currency, and creates a Stripe PaymentIntent.
@@ -538,16 +539,76 @@ func ConfirmCheckoutHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 			return
 		}
 
-		// Insert into purchase_items table
-		for _, t := range ticketDetails {
-			_, err = tx.Exec(`
-				INSERT INTO purchase_items (purchase_id, ticket_category_id, ticket_name, price, price_usd, price_native, quantity)
-				VALUES ($1, $2, $3, $4, $5, $6, $7)
-			`, purchaseID, t.CatID, t.Name, t.PriceTarget, t.PriceUSD, t.PriceNative, t.Quantity)
-			if err != nil {
-				log.Printf("[CONFIRM ERROR] Inserting into purchase_items table failed: %v", err)
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "error al guardar detalles de boletos"})
-				return
+		// Insert into purchase_items table (Supporting both Seated Events and General Admission)
+		if len(req.SeatIDs) > 0 {
+			for _, sID := range req.SeatIDs {
+				var rowLabel, block string
+				var seatNum int
+				var isWc bool
+				var catID sql.NullInt64
+				var catName string
+				var priceNative float64
+
+				err := tx.QueryRow(`
+					SELECT s.row_label, s.seat_number, s.block, s.is_wheelchair, es.ticket_category_id, COALESCE(tc.name, 'Asiento Reservado'), COALESCE(tc.price, 0)
+					FROM seats s
+					JOIN event_seats es ON es.seat_id = s.id AND es.event_id = $1
+					LEFT JOIN ticket_categories tc ON tc.id = es.ticket_category_id
+					WHERE s.id = $2
+				`, req.EventID, sID).Scan(&rowLabel, &seatNum, &block, &isWc, &catID, &catName, &priceNative)
+
+				if err == nil {
+					sLabel := fmt.Sprintf("Fila %s - Asiento %d", rowLabel, seatNum)
+					if isWc {
+						sLabel += " (Acceso Silla de Ruedas)"
+					}
+					var pUSD, pTarget float64
+					if strings.EqualFold(eventCurrency, "USD") {
+						pUSD = priceNative
+					} else {
+						pUSD = priceNative / eventRate
+					}
+					if strings.EqualFold(currency, eventCurrency) {
+						pTarget = priceNative
+					} else if strings.EqualFold(currency, "USD") {
+						pTarget = pUSD
+					} else {
+						pTarget = pUSD * targetRate
+					}
+
+					var cid *int64
+					if catID.Valid {
+						v := catID.Int64
+						cid = &v
+					}
+
+					_, err = tx.Exec(`
+						INSERT INTO purchase_items (purchase_id, ticket_category_id, ticket_name, price, price_usd, price_native, quantity, seat_id, seat_label)
+						VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $8)
+					`, purchaseID, cid, catName, pTarget, pUSD, priceNative, sID, sLabel)
+					if err != nil {
+						log.Printf("[CONFIRM ERROR] Inserting seated purchase_item failed: %v", err)
+					}
+
+					// Update event_seats status to sold
+					_, _ = tx.Exec(`
+						UPDATE event_seats 
+						SET status = 'sold', purchase_id = $1, locked_until = NULL 
+						WHERE event_id = $2 AND seat_id = $3
+					`, purchaseID, req.EventID, sID)
+				}
+			}
+		} else {
+			for _, t := range ticketDetails {
+				_, err = tx.Exec(`
+					INSERT INTO purchase_items (purchase_id, ticket_category_id, ticket_name, price, price_usd, price_native, quantity, seat_id, seat_label)
+					VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, '')
+				`, purchaseID, t.CatID, t.Name, t.PriceTarget, t.PriceUSD, t.PriceNative, t.Quantity)
+				if err != nil {
+					log.Printf("[CONFIRM ERROR] Inserting general admission purchase_items failed: %v", err)
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "error al guardar detalles de boletos"})
+					return
+				}
 			}
 		}
 
@@ -560,20 +621,37 @@ func ConfirmCheckoutHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 
 		log.Printf("[CONFIRM SUCCESS] Order %s (ID %d) saved to DB! Ticket capacity deducted successfully.", req.OrderNumber, purchaseID)
 
-		// Generate 1 PDF ticket per unit purchased
+		// Generate 1 PDF ticket per unit purchased with exact seat_label
 		var pdfTicketList []tickets.TicketPDFData
-		ticketSerialIndex := 1
-		for _, t := range emailTickets {
-			for q := 0; q < t.Quantity; q++ {
-				pdfTicketList = append(pdfTicketList, tickets.TicketPDFData{
-					OrderNumber:  req.OrderNumber,
-					TicketSerial: fmt.Sprintf("%s-%02d", req.OrderNumber, ticketSerialIndex),
-					CategoryName: t.Name,
-					Price:        t.Price,
-					Currency:     currency,
-				})
-				ticketSerialIndex++
+		itemRows, errItems := db.Query(`
+			SELECT ticket_name, price, quantity, COALESCE(seat_label, '')
+			FROM purchase_items
+			WHERE purchase_id = $1
+		`, purchaseID)
+
+		if errItems == nil {
+			ticketSerialIndex := 1
+			for itemRows.Next() {
+				var tName, sLabel string
+				var price float64
+				var qty int
+				if errScan := itemRows.Scan(&tName, &price, &qty, &sLabel); errScan == nil {
+					for q := 0; q < qty; q++ {
+						pdfTicketList = append(pdfTicketList, tickets.TicketPDFData{
+							OrderNumber:   req.OrderNumber,
+							TicketSerial:  fmt.Sprintf("%s-%02d", req.OrderNumber, ticketSerialIndex),
+							CategoryName:  tName,
+							CustomerName:  req.CustomerName,
+							CustomerEmail: req.CustomerEmail,
+							Price:         price,
+							Currency:      currency,
+							SeatLabel:     sLabel,
+						})
+						ticketSerialIndex++
+					}
+				}
 			}
+			itemRows.Close()
 		}
 
 		pdfPaths, pdfErr := tickets.GenerateAllTicketsForOrder(
@@ -634,11 +712,12 @@ func DownloadTicketsPDFHandler(db *sql.DB) http.HandlerFunc {
 		// Query purchase and event details
 		var eventID int64
 		var customerName, customerEmail, currency string
+		var isCourtesy bool
 		err := db.QueryRow(`
-			SELECT event_id, customer_name, customer_email, currency 
+			SELECT event_id, customer_name, customer_email, currency, COALESCE(is_courtesy, false) 
 			FROM purchases 
 			WHERE order_number = $1
-		`, orderNumber).Scan(&eventID, &customerName, &customerEmail, &currency)
+		`, orderNumber).Scan(&eventID, &customerName, &customerEmail, &currency, &isCourtesy)
 
 		if err != nil {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Orden no encontrada en la base de datos"})
@@ -658,7 +737,7 @@ func DownloadTicketsPDFHandler(db *sql.DB) http.HandlerFunc {
 		}
 
 		rows, err := db.Query(`
-			SELECT ticket_name, price, quantity 
+			SELECT ticket_name, price, quantity, COALESCE(seat_label, '') 
 			FROM purchase_items 
 			WHERE purchase_id = (SELECT id FROM purchases WHERE order_number = $1)
 		`, orderNumber)
@@ -672,17 +751,21 @@ func DownloadTicketsPDFHandler(db *sql.DB) http.HandlerFunc {
 		var pdfTicketList []tickets.TicketPDFData
 		ticketSerialIndex := 1
 		for rows.Next() {
-			var catName string
+			var catName, sLabel string
 			var price float64
 			var qty int
-			if err := rows.Scan(&catName, &price, &qty); err == nil {
+			if err := rows.Scan(&catName, &price, &qty, &sLabel); err == nil {
 				for q := 0; q < qty; q++ {
 					pdfTicketList = append(pdfTicketList, tickets.TicketPDFData{
-						OrderNumber:  orderNumber,
-						TicketSerial: fmt.Sprintf("%s-%02d", orderNumber, ticketSerialIndex),
-						CategoryName: catName,
-						Price:        price,
-						Currency:     currency,
+						OrderNumber:   orderNumber,
+						TicketSerial:  fmt.Sprintf("%s-%02d", orderNumber, ticketSerialIndex),
+						CategoryName:  catName,
+						CustomerName:  customerName,
+						CustomerEmail: customerEmail,
+						Price:         price,
+						Currency:      currency,
+						SeatLabel:     sLabel,
+						IsCourtesy:    isCourtesy,
 					})
 					ticketSerialIndex++
 				}
@@ -739,12 +822,13 @@ func DownloadTicketsZipHandler(db *sql.DB) http.HandlerFunc {
 		var customerName string
 		var customerEmail string
 		var currency string
+		var isCourtesy bool
 
 		err := db.QueryRow(`
-			SELECT id, event_id, customer_name, customer_email, currency 
+			SELECT id, event_id, customer_name, customer_email, currency, COALESCE(is_courtesy, false) 
 			FROM purchases 
 			WHERE order_number = $1 AND status = 'completed'
-		`, orderNumber).Scan(&purchaseID, &eventID, &customerName, &customerEmail, &currency)
+		`, orderNumber).Scan(&purchaseID, &eventID, &customerName, &customerEmail, &currency, &isCourtesy)
 
 		if err != nil {
 			if err == sql.ErrNoRows {
@@ -768,7 +852,7 @@ func DownloadTicketsZipHandler(db *sql.DB) http.HandlerFunc {
 		}
 
 		rows, err := db.Query(`
-			SELECT ticket_name, price, quantity 
+			SELECT ticket_name, price, quantity, COALESCE(seat_label, '') 
 			FROM purchase_items 
 			WHERE purchase_id = $1
 		`, purchaseID)
@@ -781,10 +865,10 @@ func DownloadTicketsZipHandler(db *sql.DB) http.HandlerFunc {
 		var pdfTicketList []tickets.TicketPDFData
 		ticketSerialIndex := 1
 		for rows.Next() {
-			var catName string
+			var catName, sLabel string
 			var price float64
 			var qty int
-			if err := rows.Scan(&catName, &price, &qty); err == nil {
+			if err := rows.Scan(&catName, &price, &qty, &sLabel); err == nil {
 				for q := 0; q < qty; q++ {
 					pdfTicketList = append(pdfTicketList, tickets.TicketPDFData{
 						OrderNumber:  orderNumber,
@@ -792,6 +876,8 @@ func DownloadTicketsZipHandler(db *sql.DB) http.HandlerFunc {
 						CategoryName: catName,
 						Price:        price,
 						Currency:     currency,
+						SeatLabel:    sLabel,
+						IsCourtesy:   isCourtesy,
 					})
 					ticketSerialIndex++
 				}

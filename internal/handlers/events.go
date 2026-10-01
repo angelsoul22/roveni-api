@@ -43,8 +43,9 @@ type Event struct {
 	InstagramURL      string           `json:"instagram_url"`
 	TikTokURL         string           `json:"tiktok_url"`
 	ServiceFeePercentage float64       `json:"service_fee_percentage"`
-	CreatedAt         time.Time        `json:"created_at"`
-	TicketCategories  []TicketCategory `json:"ticket_categories,omitempty"`
+	CourtesyQuota        int           `json:"courtesy_quota"`
+	CreatedAt            time.Time     `json:"created_at"`
+	TicketCategories     []TicketCategory `json:"ticket_categories,omitempty"`
 }
 
 type TicketCategory struct {
@@ -149,6 +150,14 @@ func CreateEventHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 			currencyCreate = "USD"
 		}
 
+		courtesyQuotaStr := r.FormValue("courtesy_quota")
+		courtesyQuota := 0
+		if courtesyQuotaStr != "" {
+			if parsed, err := strconv.Atoi(courtesyQuotaStr); err == nil && parsed >= 0 {
+				courtesyQuota = parsed
+			}
+		}
+
 		serviceFeePercentage := 20.00
 		if strings.EqualFold(strings.TrimSpace(role), "administrador") {
 			feeStr := r.FormValue("service_fee_percentage")
@@ -219,10 +228,10 @@ func CreateEventHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 
 		var eventID int64
 		err = tx.QueryRow(`
-			INSERT INTO events (organizer_id, name, description, category, image_url, country, city, venue_address, event_date, doors_open_time, show_start_time, sale_start_date, sale_start_time, max_tickets_per_user, status, currency, spotify_url, apple_music_url, youtube_url, instagram_url, tiktok_url, service_fee_percentage)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+			INSERT INTO events (organizer_id, name, description, category, image_url, country, city, venue_address, event_date, doors_open_time, show_start_time, sale_start_date, sale_start_time, max_tickets_per_user, status, currency, spotify_url, apple_music_url, youtube_url, instagram_url, tiktok_url, service_fee_percentage, courtesy_quota)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
 			RETURNING id
-		`, userID, name, description, category, imageURL, country, city, venueAddress, eventDate, doorsOpenTime, showStartTime, saleStartDate, saleStartTime, maxTickets, statusCreate, currencyCreate, spotifyURL, appleMusicURL, youtubeURL, instagramURL, tiktokURL, serviceFeePercentage).Scan(&eventID)
+		`, userID, name, description, category, imageURL, country, city, venueAddress, eventDate, doorsOpenTime, showStartTime, saleStartDate, saleStartTime, maxTickets, statusCreate, currencyCreate, spotifyURL, appleMusicURL, youtubeURL, instagramURL, tiktokURL, serviceFeePercentage, courtesyQuota).Scan(&eventID)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("failed to insert event: %v", err)})
 			return
@@ -273,14 +282,14 @@ func ListEventsHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 		if role == "administrador" {
 			// Admin sees all events (including paused/cancelled)
 			rows, err = db.Query(`
-				SELECT id, organizer_id, name, description, category, COALESCE(image_url, ''), country, city, venue_address, event_date, doors_open_time, show_start_time, sale_start_date, sale_start_time, max_tickets_per_user, COALESCE(status, 'Publicado'), COALESCE(currency, 'USD'), COALESCE(spotify_url, ''), COALESCE(apple_music_url, ''), COALESCE(youtube_url, ''), COALESCE(instagram_url, ''), COALESCE(tiktok_url, ''), COALESCE(service_fee_percentage, 20.00), created_at 
+				SELECT id, organizer_id, name, description, category, COALESCE(image_url, ''), country, city, venue_address, event_date, doors_open_time, show_start_time, sale_start_date, sale_start_time, max_tickets_per_user, COALESCE(status, 'Publicado'), COALESCE(currency, 'USD'), COALESCE(spotify_url, ''), COALESCE(apple_music_url, ''), COALESCE(youtube_url, ''), COALESCE(instagram_url, ''), COALESCE(tiktok_url, ''), COALESCE(service_fee_percentage, 20.00), COALESCE(courtesy_quota, 0), created_at 
 				FROM events 
 				ORDER BY created_at DESC
 			`)
 		} else {
 			// Organizer sees only their own events (including paused/cancelled)
 			rows, err = db.Query(`
-				SELECT id, organizer_id, name, description, category, COALESCE(image_url, ''), country, city, venue_address, event_date, doors_open_time, show_start_time, sale_start_date, sale_start_time, max_tickets_per_user, COALESCE(status, 'Publicado'), COALESCE(currency, 'USD'), COALESCE(spotify_url, ''), COALESCE(apple_music_url, ''), COALESCE(youtube_url, ''), COALESCE(instagram_url, ''), COALESCE(tiktok_url, ''), COALESCE(service_fee_percentage, 20.00), created_at 
+				SELECT id, organizer_id, name, description, category, COALESCE(image_url, ''), country, city, venue_address, event_date, doors_open_time, show_start_time, sale_start_date, sale_start_time, max_tickets_per_user, COALESCE(status, 'Publicado'), COALESCE(currency, 'USD'), COALESCE(spotify_url, ''), COALESCE(apple_music_url, ''), COALESCE(youtube_url, ''), COALESCE(instagram_url, ''), COALESCE(tiktok_url, ''), COALESCE(service_fee_percentage, 20.00), COALESCE(courtesy_quota, 0), created_at 
 				FROM events 
 				WHERE organizer_id = $1 
 				ORDER BY created_at DESC
@@ -300,7 +309,7 @@ func ListEventsHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 				&ev.ID, &ev.OrganizerID, &ev.Name, &ev.Description, &ev.Category, &ev.ImageURL, &ev.Country, &ev.City, &ev.VenueAddress,
 				&ev.EventDate, &ev.DoorsOpenTime, &ev.ShowStartTime, &ev.SaleStartDate, &ev.SaleStartTime, &ev.MaxTicketsPerUser,
 				&ev.Status, &ev.Currency,
-				&ev.SpotifyURL, &ev.AppleMusicURL, &ev.YouTubeURL, &ev.InstagramURL, &ev.TikTokURL, &ev.ServiceFeePercentage, &ev.CreatedAt,
+				&ev.SpotifyURL, &ev.AppleMusicURL, &ev.YouTubeURL, &ev.InstagramURL, &ev.TikTokURL, &ev.ServiceFeePercentage, &ev.CourtesyQuota, &ev.CreatedAt,
 			)
 			if err != nil {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "scan event error"})
@@ -348,14 +357,14 @@ func GetEventDetailHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 		// Fetch event
 		var ev Event
 		err = db.QueryRow(`
-			SELECT id, organizer_id, name, description, category, COALESCE(image_url, ''), country, city, venue_address, event_date, doors_open_time, show_start_time, sale_start_date, sale_start_time, max_tickets_per_user, COALESCE(status, 'Publicado'), COALESCE(currency, 'USD'), COALESCE(spotify_url, ''), COALESCE(apple_music_url, ''), COALESCE(youtube_url, ''), COALESCE(instagram_url, ''), COALESCE(tiktok_url, ''), COALESCE(service_fee_percentage, 20.00), created_at 
+			SELECT id, organizer_id, name, description, category, COALESCE(image_url, ''), country, city, venue_address, event_date, doors_open_time, show_start_time, sale_start_date, sale_start_time, max_tickets_per_user, COALESCE(status, 'Publicado'), COALESCE(currency, 'USD'), COALESCE(spotify_url, ''), COALESCE(apple_music_url, ''), COALESCE(youtube_url, ''), COALESCE(instagram_url, ''), COALESCE(tiktok_url, ''), COALESCE(service_fee_percentage, 20.00), COALESCE(courtesy_quota, 0), created_at 
 			FROM events 
 			WHERE id = $1
 		`, eventID).Scan(
 			&ev.ID, &ev.OrganizerID, &ev.Name, &ev.Description, &ev.Category, &ev.ImageURL, &ev.Country, &ev.City, &ev.VenueAddress,
 			&ev.EventDate, &ev.DoorsOpenTime, &ev.ShowStartTime, &ev.SaleStartDate, &ev.SaleStartTime, &ev.MaxTicketsPerUser,
 			&ev.Status, &ev.Currency,
-			&ev.SpotifyURL, &ev.AppleMusicURL, &ev.YouTubeURL, &ev.InstagramURL, &ev.TikTokURL, &ev.ServiceFeePercentage, &ev.CreatedAt,
+			&ev.SpotifyURL, &ev.AppleMusicURL, &ev.YouTubeURL, &ev.InstagramURL, &ev.TikTokURL, &ev.ServiceFeePercentage, &ev.CourtesyQuota, &ev.CreatedAt,
 		)
 		if err != nil {
 			if err == sql.ErrNoRows {
@@ -432,7 +441,7 @@ func PublicListEventsHandler(db *sql.DB) http.HandlerFunc {
 
 		// Main query
 		selectQuery := fmt.Sprintf(`
-			SELECT id, organizer_id, name, description, category, COALESCE(image_url, ''), country, city, venue_address, event_date, doors_open_time, show_start_time, sale_start_date, sale_start_time, max_tickets_per_user, COALESCE(status, 'Publicado'), COALESCE(currency, 'USD'), COALESCE(spotify_url, ''), COALESCE(apple_music_url, ''), COALESCE(youtube_url, ''), COALESCE(instagram_url, ''), COALESCE(tiktok_url, ''), COALESCE(service_fee_percentage, 20.00), created_at 
+			SELECT id, organizer_id, name, description, category, COALESCE(image_url, ''), country, city, venue_address, event_date, doors_open_time, show_start_time, sale_start_date, sale_start_time, max_tickets_per_user, COALESCE(status, 'Publicado'), COALESCE(currency, 'USD'), COALESCE(spotify_url, ''), COALESCE(apple_music_url, ''), COALESCE(youtube_url, ''), COALESCE(instagram_url, ''), COALESCE(tiktok_url, ''), COALESCE(service_fee_percentage, 20.00), COALESCE(courtesy_quota, 0), created_at 
 			FROM events 
 			%s 
 			ORDER BY event_date ASC
@@ -458,7 +467,7 @@ func PublicListEventsHandler(db *sql.DB) http.HandlerFunc {
 				&ev.ID, &ev.OrganizerID, &ev.Name, &ev.Description, &ev.Category, &ev.ImageURL, &ev.Country, &ev.City, &ev.VenueAddress,
 				&ev.EventDate, &ev.DoorsOpenTime, &ev.ShowStartTime, &ev.SaleStartDate, &ev.SaleStartTime, &ev.MaxTicketsPerUser,
 				&ev.Status, &ev.Currency,
-				&ev.SpotifyURL, &ev.AppleMusicURL, &ev.YouTubeURL, &ev.InstagramURL, &ev.TikTokURL, &ev.ServiceFeePercentage, &ev.CreatedAt,
+				&ev.SpotifyURL, &ev.AppleMusicURL, &ev.YouTubeURL, &ev.InstagramURL, &ev.TikTokURL, &ev.ServiceFeePercentage, &ev.CourtesyQuota, &ev.CreatedAt,
 			)
 			if err != nil {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "scan event error"})
@@ -517,14 +526,14 @@ func PublicEventDetailHandler(db *sql.DB) http.HandlerFunc {
 
 		var ev Event
 		err = db.QueryRow(`
-			SELECT id, organizer_id, name, description, category, COALESCE(image_url, ''), country, city, venue_address, event_date, doors_open_time, show_start_time, sale_start_date, sale_start_time, max_tickets_per_user, COALESCE(status, 'Publicado'), COALESCE(currency, 'USD'), COALESCE(spotify_url, ''), COALESCE(apple_music_url, ''), COALESCE(youtube_url, ''), COALESCE(instagram_url, ''), COALESCE(tiktok_url, ''), COALESCE(service_fee_percentage, 20.00), created_at 
+			SELECT id, organizer_id, name, description, category, COALESCE(image_url, ''), country, city, venue_address, event_date, doors_open_time, show_start_time, sale_start_date, sale_start_time, max_tickets_per_user, COALESCE(status, 'Publicado'), COALESCE(currency, 'USD'), COALESCE(spotify_url, ''), COALESCE(apple_music_url, ''), COALESCE(youtube_url, ''), COALESCE(instagram_url, ''), COALESCE(tiktok_url, ''), COALESCE(service_fee_percentage, 20.00), COALESCE(courtesy_quota, 0), created_at 
 			FROM events 
 			WHERE id = $1
 		`, eventID).Scan(
 			&ev.ID, &ev.OrganizerID, &ev.Name, &ev.Description, &ev.Category, &ev.ImageURL, &ev.Country, &ev.City, &ev.VenueAddress,
 			&ev.EventDate, &ev.DoorsOpenTime, &ev.ShowStartTime, &ev.SaleStartDate, &ev.SaleStartTime, &ev.MaxTicketsPerUser,
 			&ev.Status, &ev.Currency,
-			&ev.SpotifyURL, &ev.AppleMusicURL, &ev.YouTubeURL, &ev.InstagramURL, &ev.TikTokURL, &ev.ServiceFeePercentage, &ev.CreatedAt,
+			&ev.SpotifyURL, &ev.AppleMusicURL, &ev.YouTubeURL, &ev.InstagramURL, &ev.TikTokURL, &ev.ServiceFeePercentage, &ev.CourtesyQuota, &ev.CreatedAt,
 		)
 		if err != nil {
 			if err == sql.ErrNoRows {
@@ -610,15 +619,17 @@ func UpdateEventHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 		instagramURL := r.FormValue("instagram_url")
 		tiktokURL := r.FormValue("tiktok_url")
 
+		courtesyQuotaStr := r.FormValue("courtesy_quota")
+
 		// Fetch existing event values for fallback on empty/omitted fields
 		var existingName, existingDesc, existingCat, existingCountry, existingCity, existingVenue, existingDate, existingDoors, existingShow, existingSaleDate, existingSaleTime, existingStatus, existingCurr, existingSpot, existingApple, existingYT, existingInsta, existingTikTok string
-		var existingMax int
+		var existingMax, existingCourtesyQuota int
 		var existingFeePercentage float64
 		errExist := db.QueryRow(`
-			SELECT name, description, category, country, city, venue_address, event_date, doors_open_time, show_start_time, sale_start_date, sale_start_time, max_tickets_per_user, COALESCE(status, 'Publicado'), COALESCE(currency, 'USD'), COALESCE(spotify_url, ''), COALESCE(apple_music_url, ''), COALESCE(youtube_url, ''), COALESCE(instagram_url, ''), COALESCE(tiktok_url, ''), COALESCE(service_fee_percentage, 20.00)
+			SELECT name, description, category, country, city, venue_address, event_date, doors_open_time, show_start_time, sale_start_date, sale_start_time, max_tickets_per_user, COALESCE(status, 'Publicado'), COALESCE(currency, 'USD'), COALESCE(spotify_url, ''), COALESCE(apple_music_url, ''), COALESCE(youtube_url, ''), COALESCE(instagram_url, ''), COALESCE(tiktok_url, ''), COALESCE(service_fee_percentage, 20.00), COALESCE(courtesy_quota, 0)
 			FROM events WHERE id = $1
 		`, eventID).Scan(
-			&existingName, &existingDesc, &existingCat, &existingCountry, &existingCity, &existingVenue, &existingDate, &existingDoors, &existingShow, &existingSaleDate, &existingSaleTime, &existingMax, &existingStatus, &existingCurr, &existingSpot, &existingApple, &existingYT, &existingInsta, &existingTikTok, &existingFeePercentage,
+			&existingName, &existingDesc, &existingCat, &existingCountry, &existingCity, &existingVenue, &existingDate, &existingDoors, &existingShow, &existingSaleDate, &existingSaleTime, &existingMax, &existingStatus, &existingCurr, &existingSpot, &existingApple, &existingYT, &existingInsta, &existingTikTok, &existingFeePercentage, &existingCourtesyQuota,
 		)
 		if errExist != nil {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "evento no encontrado"})
@@ -647,6 +658,13 @@ func UpdateEventHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 		if youtubeURL == "" { youtubeURL = existingYT }
 		if instagramURL == "" { instagramURL = existingInsta }
 		if tiktokURL == "" { tiktokURL = existingTikTok }
+
+		courtesyQuota := existingCourtesyQuota
+		if courtesyQuotaStr != "" {
+			if parsed, err := strconv.Atoi(courtesyQuotaStr); err == nil && parsed >= 0 {
+				courtesyQuota = parsed
+			}
+		}
 
 		feePercentage := existingFeePercentage
 		if strings.EqualFold(strings.TrimSpace(role), "administrador") {
@@ -702,18 +720,18 @@ func UpdateEventHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 				SET name = $1, description = $2, category = $3, country = $4, city = $5, venue_address = $6, 
 				    event_date = $7, doors_open_time = $8, show_start_time = $9, sale_start_date = $10, sale_start_time = $11, 
 				    max_tickets_per_user = $12, status = $13, currency = $14, spotify_url = $15, apple_music_url = $16, youtube_url = $17, 
-				    instagram_url = $18, tiktok_url = $19, service_fee_percentage = $20, image_url = $21
-				WHERE id = $22
-			`, name, description, category, country, city, venueAddress, eventDate, doorsOpenTime, showStartTime, saleStartDate, saleStartTime, maxTickets, status, currencyUpdate, spotifyURL, appleMusicURL, youtubeURL, instagramURL, tiktokURL, feePercentage, imageURL, eventID)
+				    instagram_url = $18, tiktok_url = $19, service_fee_percentage = $20, courtesy_quota = $21, image_url = $22
+				WHERE id = $23
+			`, name, description, category, country, city, venueAddress, eventDate, doorsOpenTime, showStartTime, saleStartDate, saleStartTime, maxTickets, status, currencyUpdate, spotifyURL, appleMusicURL, youtubeURL, instagramURL, tiktokURL, feePercentage, courtesyQuota, imageURL, eventID)
 		} else {
 			_, err = tx.Exec(`
 				UPDATE events 
 				SET name = $1, description = $2, category = $3, country = $4, city = $5, venue_address = $6, 
 				    event_date = $7, doors_open_time = $8, show_start_time = $9, sale_start_date = $10, sale_start_time = $11, 
 				    max_tickets_per_user = $12, status = $13, currency = $14, spotify_url = $15, apple_music_url = $16, youtube_url = $17, 
-				    instagram_url = $18, tiktok_url = $19, service_fee_percentage = $20
-				WHERE id = $21
-			`, name, description, category, country, city, venueAddress, eventDate, doorsOpenTime, showStartTime, saleStartDate, saleStartTime, maxTickets, status, currencyUpdate, spotifyURL, appleMusicURL, youtubeURL, instagramURL, tiktokURL, feePercentage, eventID)
+				    instagram_url = $18, tiktok_url = $19, service_fee_percentage = $20, courtesy_quota = $21
+				WHERE id = $22
+			`, name, description, category, country, city, venueAddress, eventDate, doorsOpenTime, showStartTime, saleStartDate, saleStartTime, maxTickets, status, currencyUpdate, spotifyURL, appleMusicURL, youtubeURL, instagramURL, tiktokURL, feePercentage, courtesyQuota, eventID)
 		}
 
 		if err != nil {

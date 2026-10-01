@@ -278,6 +278,7 @@ type UserTicketPass struct {
 	TicketPrice   float64 `json:"ticket_price"`
 	Currency      string  `json:"currency"`
 	TicketSerial  string  `json:"ticket_serial"`
+	SeatLabel     string  `json:"seat_label,omitempty"`
 	Scanned       bool    `json:"scanned"`
 	ScannedAt     string  `json:"scanned_at,omitempty"`
 	CreatedAt     string  `json:"created_at"`
@@ -339,17 +340,17 @@ func GetMyTicketsHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 			if err := rows.Scan(&purID, &orderNum, &evID, &custName, &custEmail, &curr, &createdAt, &evName, &evImg, &evCat, &evDate, &doorsTime, &showTime, &venue, &city, &country); err == nil {
 				// Query purchase items
 				itemRows, itemErr := db.Query(`
-					SELECT ticket_name, price, quantity 
+					SELECT ticket_name, price, quantity, COALESCE(seat_label, '') 
 					FROM purchase_items 
 					WHERE purchase_id = $1
 				`, purID)
 				if itemErr == nil {
 					serialIndex := 1
 					for itemRows.Next() {
-						var tName string
+						var tName, sLabel string
 						var price float64
 						var qty int
-						if err := itemRows.Scan(&tName, &price, &qty); err == nil {
+						if err := itemRows.Scan(&tName, &price, &qty, &sLabel); err == nil {
 							for q := 0; q < qty; q++ {
 								serial := fmt.Sprintf("%s-%02d", orderNum, serialIndex)
 
@@ -382,6 +383,7 @@ func GetMyTicketsHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 									TicketPrice:   price,
 									Currency:      curr,
 									TicketSerial:  serial,
+									SeatLabel:     sLabel,
 									Scanned:       scanned,
 									ScannedAt:     scannedAtStr,
 									CreatedAt:     createdAt.Format("2006-01-02 15:04:05"),

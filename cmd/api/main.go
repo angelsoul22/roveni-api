@@ -132,6 +132,8 @@ func main() {
 	mux.HandleFunc("/public/test-smtp", handlers.TestSMTPHandler())
 	mux.HandleFunc("/organizers/events/stats", handlers.GetOrganizerEventStatsHandler(db, rdb))
 	mux.HandleFunc("/organizers/events/export-attendees-csv", handlers.ExportAttendeesCSVHandler(db, rdb))
+	mux.HandleFunc("/organizers/events/issue-courtesy", handlers.IssueCourtesyTicketHandler(db, rdb))
+	mux.HandleFunc("/organizers/events/courtesy-list", handlers.GetCourtesyListHandler(db, rdb))
 	mux.HandleFunc("/dashboard/overview", handlers.GetDashboardOverviewHandler(db, rdb))
 
 	mux.Handle("/uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir("./uploads"))))

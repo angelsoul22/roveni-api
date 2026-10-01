@@ -33,6 +33,8 @@ type TicketPDFData struct {
 	CustomerEmail string
 	Price         float64
 	Currency      string
+	SeatLabel     string
+	IsCourtesy    bool
 }
 
 func GenerateTicketQRPayload(data TicketPDFData) (string, string) {
@@ -95,6 +97,7 @@ func GenerateSingleTicketPDF(data TicketPDFData) (string, error) {
 	pdf.SetMargins(0, 0, 0)
 	pdf.SetAutoPageBreak(false, 0)
 	pdf.AddPage()
+	tr := pdf.UnicodeTranslatorFromDescriptor("")
 
 	// Warm Luxury Base Background (#d0c0ad -> RGB: 208, 192, 173)
 	pdf.SetFillColor(208, 192, 173)
@@ -119,10 +122,21 @@ func GenerateSingleTicketPDF(data TicketPDFData) (string, error) {
 		pdf.Cell(40, 6, "ROVENI SOCIETY")
 	}
 
-	pdf.SetFont("Helvetica", "B", 9)
-	pdf.SetTextColor(208, 192, 173)
-	pdf.SetXY(70, 7)
-	pdf.Cell(70, 4, "BOLETO DIGITAL OFICIAL")
+	isCourtesy := data.IsCourtesy || data.Price == 0 || strings.Contains(strings.ToUpper(data.CategoryName), "CORTESÍA") || strings.Contains(strings.ToUpper(data.CategoryName), "CORTESIA")
+
+	if isCourtesy {
+		pdf.SetFillColor(67, 9, 31)
+		pdf.Rect(60, 3, 78, 14, "F")
+		pdf.SetFont("Helvetica", "B", 10)
+		pdf.SetTextColor(255, 255, 255)
+		pdf.SetXY(60, 7)
+		pdf.CellFormat(78, 6, tr("BOLETO DE CORTESÍA"), "", 0, "C", false, 0, "")
+	} else {
+		pdf.SetFont("Helvetica", "B", 9)
+		pdf.SetTextColor(208, 192, 173)
+		pdf.SetXY(70, 7)
+		pdf.Cell(70, 4, "BOLETO DIGITAL OFICIAL")
+	}
 
 	// Ticket Serial Badge (Top Right)
 	pdf.SetFillColor(196, 180, 161) // #c4b4a1
@@ -138,56 +152,26 @@ func GenerateSingleTicketPDF(data TicketPDFData) (string, error) {
 	pdf.Line(140, 22, 140, 114)
 
 	// --- LEFT COLUMN ---
-	tr := pdf.UnicodeTranslatorFromDescriptor("")
-
-	// Check and render Event Image if present
-	hasImage := false
-	imageWidth := 34.0
-	imageHeight := 34.0
-	if data.EventImage != "" {
-		cleanImgPath := strings.TrimPrefix(data.EventImage, "/")
-		fullImgPath := filepath.Join(".", cleanImgPath)
-		if _, err := os.Stat(fullImgPath); err == nil {
-			hasImage = true
-			pdf.ImageOptions(fullImgPath, 12, 24, imageWidth, imageHeight, false, gofpdf.ImageOptions{}, 0, "")
-		}
-	}
-
 	leftMargin := 12.0
 	contentWidth := 122.0
-	if hasImage {
-		leftMargin = 50.0
-		contentWidth = 84.0
-	}
 
 	// Event Name
-	pdf.SetFont("Helvetica", "B", 13)
+	pdf.SetFont("Helvetica", "B", 14)
 	pdf.SetTextColor(10, 11, 14)
 	pdf.SetXY(leftMargin, 24)
-	pdf.MultiCell(contentWidth, 5.5, tr(data.EventName), "", "L", false)
+	pdf.MultiCell(contentWidth, 6.0, tr(data.EventName), "", "L", false)
 
 	currY := pdf.GetY() + 2
-	if hasImage && currY < 24+imageHeight {
-		// Category Badge
-		pdf.SetFillColor(196, 180, 161)
-		pdf.Rect(leftMargin, currY, 55, 6, "F")
-		pdf.SetFont("Helvetica", "B", 8)
-		pdf.SetTextColor(10, 11, 14)
-		pdf.SetXY(leftMargin+2, currY+0.8)
-		pdf.Cell(51, 4.5, tr(fmt.Sprintf("CAT: %s", strings.ToUpper(data.CategoryName))))
 
-		currY = 24 + imageHeight + 4
-	} else {
-		// Category Badge
-		pdf.SetFillColor(196, 180, 161)
-		pdf.Rect(12, currY, 65, 6, "F")
-		pdf.SetFont("Helvetica", "B", 8)
-		pdf.SetTextColor(10, 11, 14)
-		pdf.SetXY(14, currY+0.8)
-		pdf.Cell(60, 4.5, tr(fmt.Sprintf("CATEGORIA: %s", strings.ToUpper(data.CategoryName))))
+	// Category Badge
+	pdf.SetFillColor(196, 180, 161)
+	pdf.Rect(12, currY, 65, 6, "F")
+	pdf.SetFont("Helvetica", "B", 8)
+	pdf.SetTextColor(10, 11, 14)
+	pdf.SetXY(14, currY+0.8)
+	pdf.Cell(60, 4.5, tr(fmt.Sprintf("CATEGORIA: %s", strings.ToUpper(data.CategoryName))))
 
-		currY += 8
-	}
+	currY += 8
 
 	// --- LUGAR ---
 	pdf.SetFont("Helvetica", "B", 8)
@@ -248,15 +232,41 @@ func GenerateSingleTicketPDF(data TicketPDFData) (string, error) {
 	pdf.SetXY(97, currY)
 	pdf.Cell(25, 4, fmt.Sprintf("%d de %d", data.TicketIndex, data.TotalTickets))
 
-	pdf.SetFont("Helvetica", "B", 6)
+	// --- ASIENTO / UBICACIÓN ---
+	currY += 5.5
+	pdf.SetFont("Helvetica", "B", 8)
 	pdf.SetTextColor(90, 78, 64)
-	pdf.SetXY(12, 110)
-	pdf.Cell(125, 4, "Presenta este boleto digital en el acceso principal.")
+	pdf.SetXY(12, currY)
+	pdf.Cell(25, 4, "ASIENTO:")
 
-	pdf.SetFont("Helvetica", "B", 6)
-	pdf.SetTextColor(90, 78, 64)
-	pdf.SetXY(12, 113)
-	pdf.Cell(125, 4, tr("Validación y seguridad oficial Roveni Society."))
+	pdf.SetFont("Helvetica", "B", 8)
+	pdf.SetTextColor(10, 11, 14)
+	pdf.SetXY(37, currY)
+	seatDisplay := data.SeatLabel
+	if seatDisplay == "" {
+		seatDisplay = "Entrada General (Sin Asiento Reservado)"
+	}
+	pdf.Cell(97, 4, tr(seatDisplay))
+
+	if isCourtesy {
+		// Prominent Banner on Left Column Bottom
+		pdf.SetFillColor(67, 9, 31)
+		pdf.Rect(12, 102, 125, 12, "F")
+		pdf.SetFont("Helvetica", "B", 10)
+		pdf.SetTextColor(255, 255, 255)
+		pdf.SetXY(12, 105)
+		pdf.CellFormat(125, 6, tr("ENTRADA DE CORTESÍA • PROHIBIDA SU VENTA"), "", 0, "C", false, 0, "")
+	} else {
+		pdf.SetFont("Helvetica", "B", 6)
+		pdf.SetTextColor(90, 78, 64)
+		pdf.SetXY(12, 110)
+		pdf.Cell(125, 4, "Presenta este boleto digital en el acceso principal.")
+
+		pdf.SetFont("Helvetica", "B", 6)
+		pdf.SetTextColor(90, 78, 64)
+		pdf.SetXY(12, 113)
+		pdf.Cell(125, 4, tr("Validación y seguridad oficial Roveni Society."))
+	}
 
 	// --- RIGHT COLUMN ---
 	pdf.SetFillColor(196, 180, 161)
@@ -273,10 +283,19 @@ func GenerateSingleTicketPDF(data TicketPDFData) (string, error) {
 	pdf.SetXY(145, 86)
 	pdf.CellFormat(55, 5, fmt.Sprintf("SIG: %s", qrSig), "", 0, "C", false, 0, "")
 
-	pdf.SetFont("Helvetica", "B", 6)
-	pdf.SetTextColor(90, 78, 64)
-	pdf.SetXY(145, 93)
-	pdf.MultiCell(55, 3, "Escaneo exclusivo por Roveni Scanner.", "", "C", false)
+	if isCourtesy {
+		pdf.SetFillColor(67, 9, 31) // Dark Red #b41e1e
+		pdf.Rect(146, 96, 54, 18, "F")
+		pdf.SetFont("Helvetica", "B", 13)
+		pdf.SetTextColor(255, 255, 255)
+		pdf.SetXY(146, 101)
+		pdf.CellFormat(54, 8, tr("CORTESÍA"), "", 0, "C", false, 0, "")
+	} else {
+		pdf.SetFont("Helvetica", "B", 6)
+		pdf.SetTextColor(90, 78, 64)
+		pdf.SetXY(145, 93)
+		pdf.MultiCell(55, 3, "Escaneo exclusivo por Roveni Scanner.", "", "C", false)
+	}
 
 	// Validar si la librería acumuló errores internos
 	if pdf.Err() {

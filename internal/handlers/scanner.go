@@ -165,14 +165,14 @@ func ValidateTicketScanHandler(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// Get category name from purchase items
-		var categoryName string
+		// Get category name and seat label from purchase items
+		var categoryName, seatLabel string
 		_ = db.QueryRow(`
-			SELECT ticket_name 
+			SELECT ticket_name, COALESCE(seat_label, '') 
 			FROM purchase_items 
 			WHERE purchase_id = (SELECT id FROM purchases WHERE order_number = $1) 
 			LIMIT 1
-		`, dbOrderNumber).Scan(&categoryName)
+		`, dbOrderNumber).Scan(&categoryName, &seatLabel)
 
 		if categoryName == "" {
 			categoryName = "Acceso General"
@@ -205,6 +205,7 @@ func ValidateTicketScanHandler(db *sql.DB) http.HandlerFunc {
 			"customer_name":  customerName,
 			"event_name":     eventName,
 			"category_name":  categoryName,
+			"seat_label":     seatLabel,
 			"venue":          venueAddress,
 			"scanned_at":     nowLocal.Format("15:04:05 - 02/01/2006"),
 			"scanned_at_iso": now.Format(time.RFC3339),
