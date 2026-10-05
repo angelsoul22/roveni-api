@@ -1,51 +1,46 @@
 services:
-  api:
+  api_roveni:
     build: .
     ports:
       - "${PORT}:${PORT}"
     volumes:
-      - uploads_data:/app/uploads
+      - uploads_roveni_data:/app/uploads
     environment:
-      - DATABASE_URL=postgres://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}?sslmode=disable
-      - REDIS_URL=redis://cache:6379/0
+      - DATABASE_URL=postgres://${DB_USER}:${DB_PASSWORD}@db_roveni:5432/${DB_NAME}?sslmode=disable
+      - REDIS_URL=redis://cache_roveni:6379/0
       - PORT=${PORT}
       - SMTP_HOST=${SMTP_HOST}
       - SMTP_PORT=${SMTP_PORT}
       - SMTP_USER=${SMTP_USER}
       - SMTP_PASSWORD=${SMTP_PASSWORD}
-    labels:
-      - "traefik.http.services.http-0-g10mba4ol2guig7hudrzihuz-api-8a5d.loadbalancer.server.port=3030"
-      - "traefik.http.services.https-0-g10mba4ol2guig7hudrzihuz-api-8a5d.loadbalancer.server.port=3030"
     depends_on:
-      - db
-      - cache
+      - db_roveni
+      - cache_roveni
     networks:
       - default
 
-  db:
+  db_roveni:
     image: postgres:15-alpine
-    ports:
-      - "5432:5432"
     environment:
       - POSTGRES_USER=${DB_USER}
       - POSTGRES_PASSWORD=${DB_PASSWORD}
       - POSTGRES_DB=${DB_NAME}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_roveni_data:/var/lib/postgresql/data
     networks:
       - default
 
-  cache:
+  cache_roveni:
     image: redis:7-alpine
     volumes:
-      - redis_data:/data
+      - redis_roveni_data:/data
     networks:
       - default
 
 volumes:
-  postgres_data:
-  redis_data:
-  uploads_data:
+  postgres_roveni_data:
+  redis_roveni_data:
+  uploads_roveni_data:
 
 networks:
   default:
