@@ -140,7 +140,7 @@ func main() {
 
 	portStr := os.Getenv("PORT")
 	if portStr == "" {
-		portStr = "3030" // Asegurar puerto 3030 por defecto
+		portStr = "8000" // Asegurar puerto 8000 por defecto
 	}
 	port := ":" + portStr
 
