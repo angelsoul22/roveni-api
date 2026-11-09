@@ -57,6 +57,7 @@ type TicketCategory struct {
 	SoldCount   int     `json:"sold_count"`
 	Available   int     `json:"available"`
 	Description string  `json:"description"`
+	Is2x1       bool    `json:"is_2x1"`
 }
 
 type TicketCategoryInput struct {
@@ -65,6 +66,7 @@ type TicketCategoryInput struct {
 	Price       float64 `json:"price"`
 	Capacity    int     `json:"capacity"`
 	Description string  `json:"description"`
+	Is2x1       bool    `json:"is_2x1"`
 }
 
 func fetchCategoriesForEvent(db *sql.DB, eventID int64) []TicketCategory {
@@ -77,7 +79,8 @@ func fetchCategoriesForEvent(db *sql.DB, eventID int64) []TicketCategory {
 			tc.capacity, 
 			COALESCE(sub.sold_count, 0) as sold_count,
 			GREATEST(0, tc.capacity - COALESCE(sub.sold_count, 0)) as available,
-			COALESCE(tc.description, '')
+			COALESCE(tc.description, ''),
+			COALESCE(tc.is_2x1, false)
 		FROM ticket_categories tc
 		LEFT JOIN (
 			SELECT pi.ticket_category_id, SUM(pi.quantity) as sold_count
@@ -97,7 +100,7 @@ func fetchCategoriesForEvent(db *sql.DB, eventID int64) []TicketCategory {
 	cats := []TicketCategory{}
 	for rows.Next() {
 		var cat TicketCategory
-		if err := rows.Scan(&cat.ID, &cat.EventID, &cat.Name, &cat.Price, &cat.Capacity, &cat.SoldCount, &cat.Available, &cat.Description); err == nil {
+		if err := rows.Scan(&cat.ID, &cat.EventID, &cat.Name, &cat.Price, &cat.Capacity, &cat.SoldCount, &cat.Available, &cat.Description, &cat.Is2x1); err == nil {
 			cats = append(cats, cat)
 		}
 	}
@@ -237,16 +240,22 @@ func CreateEventHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 			return
 		}
 
+		isAdmin := strings.EqualFold(strings.TrimSpace(role), "administrador")
+
 		// Insert ticket categories
 		for _, cat := range categoriesInput {
 			if cat.Name == "" || cat.Capacity <= 0 {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid ticket category name or capacity"})
 				return
 			}
+			is2x1 := false
+			if isAdmin {
+				is2x1 = cat.Is2x1
+			}
 			_, err = tx.Exec(`
-				INSERT INTO ticket_categories (event_id, name, price, capacity, description)
-				VALUES ($1, $2, $3, $4, $5)
-			`, eventID, cat.Name, cat.Price, cat.Capacity, cat.Description)
+				INSERT INTO ticket_categories (event_id, name, price, capacity, description, is_2x1)
+				VALUES ($1, $2, $3, $4, $5, $6)
+			`, eventID, cat.Name, cat.Price, cat.Capacity, cat.Description, is2x1)
 			if err != nil {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("failed to insert ticket category: %v", err)})
 				return
@@ -742,6 +751,7 @@ func UpdateEventHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 		// Update ticket categories safely without deleting categories or historical purchase items
 		categoriesJSON := r.FormValue("ticket_categories")
 		if categoriesJSON != "" {
+			isAdmin := strings.EqualFold(strings.TrimSpace(role), "administrador")
 			var categoriesInput []TicketCategoryInput
 			if err := json.Unmarshal([]byte(categoriesJSON), &categoriesInput); err == nil && len(categoriesInput) > 0 {
 				var keptIDs []int64
@@ -753,11 +763,19 @@ func UpdateEventHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 						var exists bool
 						_ = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM ticket_categories WHERE id = $1 AND event_id = $2)", cat.ID, eventID).Scan(&exists)
 						if exists {
-							_, _ = tx.Exec(`
-								UPDATE ticket_categories 
-								SET name = $1, price = $2, capacity = $3, description = $4 
-								WHERE id = $5 AND event_id = $6
-							`, cat.Name, cat.Price, cat.Capacity, cat.Description, cat.ID, eventID)
+							if isAdmin {
+								_, _ = tx.Exec(`
+									UPDATE ticket_categories 
+									SET name = $1, price = $2, capacity = $3, description = $4, is_2x1 = $5
+									WHERE id = $6 AND event_id = $7
+								`, cat.Name, cat.Price, cat.Capacity, cat.Description, cat.Is2x1, cat.ID, eventID)
+							} else {
+								_, _ = tx.Exec(`
+									UPDATE ticket_categories 
+									SET name = $1, price = $2, capacity = $3, description = $4 
+									WHERE id = $5 AND event_id = $6
+								`, cat.Name, cat.Price, cat.Capacity, cat.Description, cat.ID, eventID)
+							}
 							keptIDs = append(keptIDs, cat.ID)
 							continue
 						}
@@ -767,19 +785,31 @@ func UpdateEventHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 					var existingID int64
 					err := tx.QueryRow("SELECT id FROM ticket_categories WHERE event_id = $1 AND LOWER(name) = LOWER($2)", eventID, cat.Name).Scan(&existingID)
 					if err == nil && existingID > 0 {
-						_, _ = tx.Exec(`
-							UPDATE ticket_categories 
-							SET price = $1, capacity = $2, description = $3 
-							WHERE id = $4
-						`, cat.Price, cat.Capacity, cat.Description, existingID)
+						if isAdmin {
+							_, _ = tx.Exec(`
+								UPDATE ticket_categories 
+								SET price = $1, capacity = $2, description = $3, is_2x1 = $4
+								WHERE id = $5
+							`, cat.Price, cat.Capacity, cat.Description, cat.Is2x1, existingID)
+						} else {
+							_, _ = tx.Exec(`
+								UPDATE ticket_categories 
+								SET price = $1, capacity = $2, description = $3 
+								WHERE id = $4
+							`, cat.Price, cat.Capacity, cat.Description, existingID)
+						}
 						keptIDs = append(keptIDs, existingID)
 					} else {
 						var newID int64
+						is2x1 := false
+						if isAdmin {
+							is2x1 = cat.Is2x1
+						}
 						err := tx.QueryRow(`
-							INSERT INTO ticket_categories (event_id, name, price, capacity, description)
-							VALUES ($1, $2, $3, $4, $5)
+							INSERT INTO ticket_categories (event_id, name, price, capacity, description, is_2x1)
+							VALUES ($1, $2, $3, $4, $5, $6)
 							RETURNING id
-						`, eventID, cat.Name, cat.Price, cat.Capacity, cat.Description).Scan(&newID)
+						`, eventID, cat.Name, cat.Price, cat.Capacity, cat.Description, is2x1).Scan(&newID)
 						if err == nil {
 							keptIDs = append(keptIDs, newID)
 						}

@@ -177,16 +177,18 @@ func CreatePaymentIntentHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc 
 			var name string
 			var priceNative float64
 			var available int
+			var is2x1 bool
 			err := db.QueryRow(`
 				SELECT tc.name, tc.price, GREATEST(0, tc.capacity - COALESCE((
 					SELECT SUM(pi.quantity) 
 					FROM purchase_items pi 
 					JOIN purchases p ON pi.purchase_id = p.id 
 					WHERE pi.ticket_category_id = tc.id AND p.status = 'completed'
-				), 0)) as available
+				), 0)) as available,
+				COALESCE(tc.is_2x1, false)
 				FROM ticket_categories tc
 				WHERE tc.id = $1 AND tc.event_id = $2
-			`, item.ID, req.EventID).Scan(&name, &priceNative, &available)
+			`, item.ID, req.EventID).Scan(&name, &priceNative, &available, &is2x1)
 
 			if err != nil {
 				if err == sql.ErrNoRows {
@@ -204,7 +206,12 @@ func CreatePaymentIntentHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc 
 				return
 			}
 
-			itemNative := priceNative * float64(item.Quantity)
+			chargeableUnits := item.Quantity
+			if is2x1 {
+				chargeableUnits = int(math.Ceil(float64(item.Quantity) / 2.0))
+			}
+
+			itemNative := priceNative * float64(chargeableUnits)
 			subtotalNative += itemNative
 
 			var itemUSD float64
@@ -463,7 +470,8 @@ func ConfirmCheckoutHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 
 			var catName string
 			var priceNative float64
-			err = tx.QueryRow(`SELECT name, price FROM ticket_categories WHERE id = $1`, item.ID).Scan(&catName, &priceNative)
+			var is2x1 bool
+			err = tx.QueryRow(`SELECT name, price, COALESCE(is_2x1, false) FROM ticket_categories WHERE id = $1`, item.ID).Scan(&catName, &priceNative, &is2x1)
 			if err != nil {
 				log.Printf("[CONFIRM ERROR] Querying category details for ID %d failed: %v", item.ID, err)
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "error al obtener precio de categoría"})
@@ -486,22 +494,31 @@ func ConfirmCheckoutHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 				priceTarget = priceUSD * targetRate
 			}
 
-			totalSubtotalTarget += priceTarget * float64(item.Quantity)
-			totalSubtotalUSD += priceUSD * float64(item.Quantity)
+			chargeableUnits := item.Quantity
+			if is2x1 {
+				chargeableUnits = int(math.Ceil(float64(item.Quantity) / 2.0))
+			}
+
+			totalSubtotalTarget += priceTarget * float64(chargeableUnits)
+			totalSubtotalUSD += priceUSD * float64(chargeableUnits)
+
+			effPriceTarget := (priceTarget * float64(chargeableUnits)) / float64(item.Quantity)
+			effPriceUSD := (priceUSD * float64(chargeableUnits)) / float64(item.Quantity)
+			effPriceNative := (priceNative * float64(chargeableUnits)) / float64(item.Quantity)
 
 			emailTickets = append(emailTickets, mailer.TicketItem{
 				Name:     catName,
 				Quantity: item.Quantity,
-				Price:    priceTarget,
+				Price:    effPriceTarget,
 			})
 
 			ticketDetails = append(ticketDetails, TicketItemDetail{
 				CatID:       item.ID,
 				Name:        catName,
 				Quantity:    item.Quantity,
-				PriceTarget: priceTarget,
-				PriceUSD:    priceUSD,
-				PriceNative: priceNative,
+				PriceTarget: effPriceTarget,
+				PriceUSD:    effPriceUSD,
+				PriceNative: effPriceNative,
 			})
 		}
 
@@ -975,14 +992,20 @@ func CreateCheckoutSessionHandler(db *sql.DB) http.HandlerFunc {
 			}
 			var catName string
 			var priceUSD float64
-			err := db.QueryRow(`SELECT name, price FROM ticket_categories WHERE id = $1`, item.ID).Scan(&catName, &priceUSD)
+			var is2x1 bool
+			err := db.QueryRow(`SELECT name, price, COALESCE(is_2x1, false) FROM ticket_categories WHERE id = $1`, item.ID).Scan(&catName, &priceUSD, &is2x1)
 			if err == nil {
+				chargeableUnits := item.Quantity
+				if is2x1 {
+					chargeableUnits = int(math.Ceil(float64(item.Quantity) / 2.0))
+				}
 				priceConverted := priceUSD * rate
-				subtotalConverted += priceConverted * float64(item.Quantity)
+				subtotalConverted += priceConverted * float64(chargeableUnits)
+				effUnitAmount := toStripeAmount((priceConverted*float64(chargeableUnits))/float64(item.Quantity), currency)
 				lineItems = append(lineItems, &stripe.CheckoutSessionLineItemParams{
 					PriceData: &stripe.CheckoutSessionLineItemPriceDataParams{
 						Currency:   stripe.String(strings.ToLower(currency)),
-						UnitAmount: stripe.Int64(toStripeAmount(priceConverted, currency)),
+						UnitAmount: stripe.Int64(effUnitAmount),
 						ProductData: &stripe.CheckoutSessionLineItemPriceDataProductDataParams{
 							Name: stripe.String(catName),
 						},

@@ -172,8 +172,10 @@ func createTables(db *sql.DB) error {
 		name TEXT NOT NULL,
 		price NUMERIC(10, 2) NOT NULL,
 		capacity INTEGER NOT NULL,
-		description TEXT DEFAULT ''
-	)
+		description TEXT DEFAULT '',
+		is_2x1 BOOLEAN DEFAULT FALSE
+	);
+	ALTER TABLE ticket_categories ADD COLUMN IF NOT EXISTS is_2x1 BOOLEAN DEFAULT FALSE;
 	`); err != nil {
 		return fmt.Errorf("error creating ticket_categories table: %w", err)
 	}
