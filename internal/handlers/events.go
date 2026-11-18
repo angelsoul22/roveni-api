@@ -606,9 +606,25 @@ func PublicEventDetailHandler(db *sql.DB) http.HandlerFunc {
 				} else {
 					ev.AccessGranted = false
 					ev.RequiresAccessCode = true
-					// Clear secret access code and hide ticket categories
+					// Clear secret access code and hide all sensitive details so nothing can be seen before unlocking
 					ev.AccessCode = ""
 					ev.TicketCategories = []TicketCategory{}
+					ev.Description = ""
+					ev.VenueAddress = ""
+					ev.City = ""
+					ev.Country = ""
+					ev.EventDate = ""
+					ev.DoorsOpenTime = ""
+					ev.ShowStartTime = ""
+					ev.SaleStartDate = ""
+					ev.SaleStartTime = ""
+					ev.SpotifyURL = ""
+					ev.AppleMusicURL = ""
+					ev.YouTubeURL = ""
+					ev.InstagramURL = ""
+					ev.TikTokURL = ""
+					ev.ImageURL = ""
+					ev.TicketAdImageURL = ""
 					writeJSON(w, http.StatusOK, ev)
 					return
 				}
