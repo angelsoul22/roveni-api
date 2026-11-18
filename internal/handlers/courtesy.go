@@ -349,6 +349,7 @@ func IssueCourtesyTicketHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc 
 							Currency:         currency,
 							SeatLabel:        sLabel,
 							IsCourtesy:       !isInstitutionalInvitation,
+							IsPrivate:        isPrivate,
 							TicketDesignMode: designMode,
 							TicketAdImage:    ticketAdImageURL,
 						})

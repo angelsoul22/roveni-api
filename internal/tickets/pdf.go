@@ -19,25 +19,26 @@ import (
 )
 
 type TicketPDFData struct {
-	OrderNumber   string
-	TicketSerial  string
-	TicketIndex   int
-	TotalTickets  int
-	EventName     string
-	EventImage    string
-	VenueAddress  string
-	City          string
-	Country       string
-	EventDate     string
-	DoorsOpenTime string
-	ShowStartTime string
-	CategoryName  string
-	CustomerName  string
-	CustomerEmail string
-	Price         float64
-	Currency      string
-	SeatLabel     string
-	IsCourtesy    bool
+	OrderNumber      string
+	TicketSerial     string
+	TicketIndex      int
+	TotalTickets     int
+	EventName        string
+	EventImage       string
+	VenueAddress     string
+	City             string
+	Country          string
+	EventDate        string
+	DoorsOpenTime    string
+	ShowStartTime    string
+	CategoryName     string
+	CustomerName     string
+	CustomerEmail    string
+	Price            float64
+	Currency         string
+	SeatLabel        string
+	IsCourtesy       bool
+	IsPrivate        bool
 	TicketDesignMode string
 	TicketAdImage    string
 }
@@ -101,6 +102,7 @@ func GenerateSingleTicketPDF(data TicketPDFData) (string, error) {
 	})
 	pdf.SetMargins(0, 0, 0)
 	pdf.SetAutoPageBreak(false, 0)
+	pdf.SetCompression(false)
 	pdf.AddPage()
 	tr := pdf.UnicodeTranslatorFromDescriptor("")
 
@@ -239,15 +241,21 @@ func GenerateSingleTicketPDF(data TicketPDFData) (string, error) {
 	pdf.SetXY(37, currY)
 	pdf.Cell(45, 3.8, data.OrderNumber)
 
-	pdf.SetFont("Helvetica", "B", 7.5)
-	pdf.SetTextColor(90, 78, 64)
-	pdf.SetXY(82, currY)
-	pdf.Cell(15, 3.8, "BOLETO:")
+	// Omitir "BOLETO: 1 de 1" cuando sea un solo boleto en eventos privados para mantener la formalidad
+	isPrivateEvent := data.IsPrivate || isInvitation
+	hideTicketCounter := isPrivateEvent && data.TotalTickets <= 1
 
-	pdf.SetFont("Helvetica", "B", 7.5)
-	pdf.SetTextColor(10, 11, 14)
-	pdf.SetXY(97, currY)
-	pdf.Cell(25, 3.8, fmt.Sprintf("%d de %d", data.TicketIndex, data.TotalTickets))
+	if !hideTicketCounter {
+		pdf.SetFont("Helvetica", "B", 7.5)
+		pdf.SetTextColor(90, 78, 64)
+		pdf.SetXY(82, currY)
+		pdf.Cell(15, 3.8, "BOLETO:")
+
+		pdf.SetFont("Helvetica", "B", 7.5)
+		pdf.SetTextColor(10, 11, 14)
+		pdf.SetXY(97, currY)
+		pdf.Cell(25, 3.8, fmt.Sprintf("%d de %d", data.TicketIndex, data.TotalTickets))
+	}
 
 	// --- ASIENTO / UBICACIÓN (Solo si el boleto tiene asiento asignado) ---
 	if strings.TrimSpace(data.SeatLabel) != "" {
@@ -347,7 +355,7 @@ func GenerateSingleTicketPDF(data TicketPDFData) (string, error) {
 		pdf.SetFont("Helvetica", "B", 11)
 		pdf.SetTextColor(208, 192, 173)
 		pdf.SetXY(146, 101)
-		pdf.CellFormat(54, 8, tr("INVITADO"), "", 0, "C", false, 0, "")
+		pdf.CellFormat(54, 8, tr("INVITADO ESPECIAL"), "", 0, "C", false, 0, "")
 	} else if isCourtesy {
 		pdf.SetFillColor(67, 9, 31) // Dark Red #b41e1e
 		pdf.Rect(146, 96, 54, 18, "F")

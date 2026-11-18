@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/mail"
 	"net/smtp"
 	"os"
 	"path/filepath"
@@ -22,6 +23,7 @@ type TicketItem struct {
 type EmailData struct {
 	To             string
 	CustomerName   string
+	SenderName     string // Nombre del remitente (ej. "Roveni", "Roveni Society")
 	OrderNumber    string
 	EventID        int64
 	EventName      string
@@ -117,104 +119,115 @@ func BuildConfirmationEmailHTML(data EmailData) (string, string) {
 	isInstitutional := data.IsPrivate && strings.ToLower(strings.TrimSpace(data.PrivateType)) == "solo_lectura"
 	isCourtesy := data.IsCourtesy && !isInstitutional
 
-	subject := fmt.Sprintf("🎟️ Boletos Confirmados · %s (Orden #%s)", data.EventName, data.OrderNumber)
+	subject := fmt.Sprintf("Boletos Confirmados · %s (Orden #%s)", data.EventName, data.OrderNumber)
 	if isInstitutional {
-		subject = fmt.Sprintf("🏛️ Invitación Oficial · %s (Acreditación #%s)", data.EventName, data.OrderNumber)
+		subject = fmt.Sprintf("Invitación Oficial · %s (Acreditación #%s)", data.EventName, data.OrderNumber)
 	} else if isCourtesy {
-		subject = fmt.Sprintf("🎟️ Acceso Especial Confirmado · %s (Orden #%s)", data.EventName, data.OrderNumber)
+		subject = fmt.Sprintf("Acceso Especial Confirmado · %s (Orden #%s)", data.EventName, data.OrderNumber)
 	} else if data.IsPrivate {
-		subject = fmt.Sprintf("🔒 Acceso Privado Confirmado · %s (Orden #%s)", data.EventName, data.OrderNumber)
+		subject = fmt.Sprintf("Acceso Privado Confirmado · %s (Orden #%s)", data.EventName, data.OrderNumber)
 	}
 
-	bannerBadgeHTML := `<div style="display: inline-block; background-color: rgba(208, 192, 173, 0.08); border: 1px solid #d0c0ad; border-radius: 4px; padding: 6px 18px; margin-bottom: 18px;">
+	bannerBadgeHTML := `<div style="display: inline-block; background-color: #0a0b0e; color: #d0c0ad; border: 1px solid #0a0b0e; border-radius: 4px; padding: 6px 18px; margin-bottom: 18px;">
                                 <span style="color: #d0c0ad; font-weight: bold; font-size: 11px; text-transform: uppercase; letter-spacing: 2px;">✦ ACCESO CONFIRMADO · ORDEN OFICIAL</span>
                             </div>`
 	bannerTitle := fmt.Sprintf("Bienvenido(a), %s", data.CustomerName)
 	bannerSubtitle := "Tu compra ha sido procesada y confirmada con éxito. Hemos generado tus boletos digitales con firma criptográfica y código QR de alta seguridad. Tus archivos PDF oficiales se encuentran adjuntos a este correo para tu acceso al recinto."
 
 	if isInstitutional {
-		bannerBadgeHTML = `<div style="display: inline-block; background-color: rgba(208, 192, 173, 0.1); border: 1px solid #d0c0ad; border-radius: 4px; padding: 6px 18px; margin-bottom: 18px;">
-                                <span style="color: #d0c0ad; font-weight: bold; font-size: 11px; text-transform: uppercase; letter-spacing: 2px;">🏛️ INVITACIÓN OFICIAL · ACREDITACIÓN NOMINAL</span>
+		bannerBadgeHTML = `<div style="display: inline-block; background-color: #0a0b0e; color: #d0c0ad; border: 1px solid #0a0b0e; border-radius: 4px; padding: 6px 18px; margin-bottom: 18px;">
+                                <span style="color: #d0c0ad; font-weight: bold; font-size: 11px; text-transform: uppercase; letter-spacing: 2px;">INVITACIÓN OFICIAL</span>
                             </div>`
 		bannerTitle = fmt.Sprintf("Distinguido(a) %s,", data.CustomerName)
 		bannerSubtitle = "Es un honor confirmarle que ha sido formalmente acreditado(a) para asistir a este acto solemne. Su invitación oficial digital con código QR de acceso personal e intransferible se encuentra adjunta en formato PDF al presente correo para su recepción y control de acceso."
 	} else if isCourtesy {
-		bannerBadgeHTML = `<div style="display: inline-block; background-color: rgba(67, 9, 31, 0.4); border: 1px solid #d0c0ad; border-radius: 4px; padding: 6px 18px; margin-bottom: 18px;">
-                                <span style="color: #d0c0ad; font-weight: bold; font-size: 11px; text-transform: uppercase; letter-spacing: 2px;">🎟️ ACCESO ESPECIAL · CORTESÍA AUTORIZADA</span>
+		bannerBadgeHTML = `<div style="display: inline-block; background-color: #43091f; color: #f5efe6; border: 1px solid #43091f; border-radius: 4px; padding: 6px 18px; margin-bottom: 18px;">
+                                <span style="color: #f5efe6; font-weight: bold; font-size: 11px; text-transform: uppercase; letter-spacing: 2px;">🎟️ ACCESO ESPECIAL · CORTESÍA AUTORIZADA</span>
                             </div>`
 		bannerTitle = fmt.Sprintf("¡Tu acceso especial está listo, %s!", data.CustomerName)
 		bannerSubtitle = "Se ha emitido tu pase de cortesía oficial con todas las facilidades de acceso. Encontrarás tus boletos digitales adjuntos en formato PDF con su correspondiente código QR personal listos para su validación en el acceso."
 	} else if data.IsPrivate {
-		bannerBadgeHTML = `<div style="display: inline-block; background-color: rgba(208, 192, 173, 0.1); border: 1px solid #d0c0ad; border-radius: 4px; padding: 6px 18px; margin-bottom: 18px;">
+		bannerBadgeHTML = `<div style="display: inline-block; background-color: #0a0b0e; color: #d0c0ad; border: 1px solid #0a0b0e; border-radius: 4px; padding: 6px 18px; margin-bottom: 18px;">
                                 <span style="color: #d0c0ad; font-weight: bold; font-size: 11px; text-transform: uppercase; letter-spacing: 2px;">🔒 EVENTO PRIVADO · ACCESO EXCLUSIVO</span>
                             </div>`
 		bannerTitle = fmt.Sprintf("Acceso Exclusivo Confirmado, %s", data.CustomerName)
 		bannerSubtitle = "Tus boletos oficiales para este evento privado exclusivo han sido emitidos con éxito. Encontrarás tus pases adjuntos en formato PDF con código QR individual para tu ingreso al recinto."
 	}
 
-	// Build ticket rows HTML
-	var ticketRows strings.Builder
-	for _, t := range data.Tickets {
-		priceStr := formatCurrency(t.Price*float64(t.Quantity), data.Currency)
-		if isInstitutional {
-			priceStr = "Invitación Oficial"
-		} else if isCourtesy {
-			priceStr = "Cortesía ($0.00)"
-		}
-		ticketRows.WriteString(fmt.Sprintf(`
+	// Build ticket breakdown block (omitted entirely for institutional solo_lectura events)
+	var breakdownBlock string
+	if !isInstitutional {
+		var ticketRows strings.Builder
+		for _, t := range data.Tickets {
+			priceStr := formatCurrency(t.Price*float64(t.Quantity), data.Currency)
+			if isCourtesy {
+				priceStr = "Cortesía ($0.00)"
+			}
+			ticketRows.WriteString(fmt.Sprintf(`
 			<tr>
-				<td style="padding: 12px 14px; border-bottom: 1px solid rgba(208, 192, 173, 0.1); color: #e8dfd5; font-size: 13px; font-weight: 500;">%s</td>
-				<td style="padding: 12px 14px; border-bottom: 1px solid rgba(208, 192, 173, 0.1); color: #d0c0ad; font-size: 13px; text-align: center; font-weight: 700;">%d</td>
-				<td style="padding: 12px 14px; border-bottom: 1px solid rgba(208, 192, 173, 0.1); color: #d0c0ad; font-size: 13px; text-align: right; font-weight: 700;">%s</td>
+				<td style="padding: 12px 14px; border-bottom: 1px solid rgba(10, 11, 14, 0.08); color: #0a0b0e; font-size: 13px; font-weight: 500;">%s</td>
+				<td style="padding: 12px 14px; border-bottom: 1px solid rgba(10, 11, 14, 0.08); color: #0a0b0e; font-size: 13px; text-align: center; font-weight: 700;">%d</td>
+				<td style="padding: 12px 14px; border-bottom: 1px solid rgba(10, 11, 14, 0.08); color: #0a0b0e; font-size: 13px; text-align: right; font-weight: 700;">%s</td>
 			</tr>
 		`, t.Name, t.Quantity, priceStr))
-	}
+		}
 
-	var totalsHTML string
-	if isInstitutional {
-		totalsHTML = `
-            <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-top: 16px; border-top: 1px solid rgba(208, 192, 173, 0.2); padding-top: 14px;">
+		var totalsHTML string
+		if isCourtesy {
+			totalsHTML = `
+            <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-top: 16px; border-top: 1px solid rgba(10, 11, 14, 0.15); padding-top: 14px;">
                 <tr>
-                    <td align="left" style="padding: 4px 0; color: #9e9488; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;">Modalidad de Ingreso:</td>
-                    <td align="right" style="padding: 4px 0; color: #d0c0ad; font-size: 13px; font-weight: bold;">Invitación Oficial Acreditada</td>
+                    <td align="left" style="padding: 4px 0; color: #7a7065; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;">Modalidad de Ingreso:</td>
+                    <td align="right" style="padding: 4px 0; color: #0a0b0e; font-size: 13px; font-weight: bold;">Pase de Cortesía Autorizado</td>
                 </tr>
                 <tr>
-                    <td align="left" style="padding: 4px 0; color: #9e9488; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;">Costo de Acreditación:</td>
-                    <td align="right" style="padding: 4px 0; color: #f5efe6; font-size: 13px; font-weight: bold;">Sin Costo Comercial ($0.00)</td>
-                </tr>
-            </table>`
-	} else if isCourtesy {
-		totalsHTML = `
-            <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-top: 16px; border-top: 1px solid rgba(208, 192, 173, 0.2); padding-top: 14px;">
-                <tr>
-                    <td align="left" style="padding: 4px 0; color: #9e9488; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;">Modalidad de Ingreso:</td>
-                    <td align="right" style="padding: 4px 0; color: #d0c0ad; font-size: 13px; font-weight: bold;">Pase de Cortesía Autorizado</td>
-                </tr>
-                <tr>
-                    <td align="left" style="padding: 4px 0; color: #9e9488; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;">Total Facturado:</td>
-                    <td align="right" style="padding: 4px 0; color: #f5efe6; font-size: 13px; font-weight: bold;">$0.00 (Acceso Especial)</td>
+                    <td align="left" style="padding: 4px 0; color: #7a7065; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;">Total Facturado:</td>
+                    <td align="right" style="padding: 4px 0; color: #43091f; font-size: 13px; font-weight: bold;">$0.00 (Acceso Especial)</td>
                 </tr>
             </table>`
-	} else {
-		totalsHTML = fmt.Sprintf(`
-            <table width="100%%" border="0" cellspacing="0" cellpadding="0" style="margin-top: 16px; border-top: 1px solid rgba(208, 192, 173, 0.2); padding-top: 16px;">
+		} else {
+			totalsHTML = fmt.Sprintf(`
+            <table width="100%%" border="0" cellspacing="0" cellpadding="0" style="margin-top: 16px; border-top: 1px solid rgba(10, 11, 14, 0.15); padding-top: 16px;">
                 <tr>
-                    <td align="right" style="padding: 4px 0; color: #9e9488; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;">Subtotal:</td>
-                    <td align="right" width="130" style="padding: 4px 0; color: #f5efe6; font-size: 13px; font-weight: 600;">%s</td>
+                    <td align="right" style="padding: 4px 0; color: #7a7065; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;">Subtotal:</td>
+                    <td align="right" width="130" style="padding: 4px 0; color: #0a0b0e; font-size: 13px; font-weight: 600;">%s</td>
                 </tr>
                 <tr>
-                    <td align="right" style="padding: 4px 0; color: #9e9488; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;">Cargos de Servicio:</td>
-                    <td align="right" width="130" style="padding: 4px 0; color: #f5efe6; font-size: 13px; font-weight: 600;">%s</td>
+                    <td align="right" style="padding: 4px 0; color: #7a7065; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;">Cargos de Servicio:</td>
+                    <td align="right" width="130" style="padding: 4px 0; color: #0a0b0e; font-size: 13px; font-weight: 600;">%s</td>
                 </tr>
                 <tr>
-                    <td align="right" style="padding: 10px 0 0 0; color: #d0c0ad; font-size: 14px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Total Pagado:</td>
-                    <td align="right" width="130" style="padding: 10px 0 0 0; color: #d0c0ad; font-size: 18px; font-weight: 900;">%s</td>
+                    <td align="right" style="padding: 10px 0 0 0; color: #0a0b0e; font-size: 14px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Total Pagado:</td>
+                    <td align="right" width="130" style="padding: 10px 0 0 0; color: #0a0b0e; font-size: 19px; font-weight: 900;">%s</td>
                 </tr>
             </table>`,
-			formatCurrency(data.Subtotal, data.Currency),
-			formatCurrency(data.ServiceFee, data.Currency),
-			formatCurrency(data.TotalAmount, data.Currency),
-		)
+				formatCurrency(data.Subtotal, data.Currency),
+				formatCurrency(data.ServiceFee, data.Currency),
+				formatCurrency(data.TotalAmount, data.Currency),
+			)
+		}
+
+		breakdownBlock = fmt.Sprintf(`
+                    <!-- Ticket Breakdown -->
+                    <tr>
+                        <td style="padding: 0 30px 30px 30px;">
+                            <div style="margin: 0 0 12px 0; color: #7a7065; font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 700;">Desglose de Accesos</div>
+                            <table width="100%%" border="0" cellspacing="0" cellpadding="0" style="border-collapse: collapse; border: 1px solid rgba(10, 11, 14, 0.14); border-radius: 6px; overflow: hidden;">
+                                <thead>
+                                    <tr style="background-color: #d0c0ad; border-bottom: 1px solid rgba(10, 11, 14, 0.18);">
+                                        <th align="left" style="padding: 10px 14px; color: #0a0b0e; font-size: 10.5px; text-transform: uppercase; letter-spacing: 1px; font-weight: 700;">Concepto</th>
+                                        <th align="center" style="padding: 10px 14px; color: #0a0b0e; font-size: 10.5px; text-transform: uppercase; letter-spacing: 1px; font-weight: 700;">Cant.</th>
+                                        <th align="right" style="padding: 10px 14px; color: #0a0b0e; font-size: 10.5px; text-transform: uppercase; letter-spacing: 1px; font-weight: 700;">Total</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    %s
+                                </tbody>
+                            </table>
+
+                            %s
+                        </td>
+                    </tr>`, ticketRows.String(), totalsHTML)
 	}
 
 	// Build private event information block (Informative without pre-loaded key button)
@@ -230,8 +243,8 @@ func BuildConfirmationEmailHTML(data EmailData) (string, string) {
 			codeRow = fmt.Sprintf(`
                 <tr>
                     <td style="padding: 12px 0 4px 0;">
-                        <span style="color: #d0c0ad; font-size: 10.5px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 700; display: block; margin-bottom: 6px;">🔑 Clave de Acceso al Evento:</span>
-                        <div style="display: inline-block; background-color: #0a0b0e; border: 1px solid #d0c0ad; border-radius: 4px; padding: 8px 18px;">
+                        <span style="color: #7a7065; font-size: 10.5px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 700; display: block; margin-bottom: 6px;">Clave de Acceso al Evento:</span>
+                        <div style="display: inline-block; background-color: #0a0b0e; border: 1px solid #0a0b0e; border-radius: 4px; padding: 8px 18px;">
                             <span style="font-family: 'Courier New', Courier, monospace; font-size: 16px; font-weight: bold; color: #d0c0ad; letter-spacing: 3px;">%s</span>
                         </div>
                     </td>
@@ -244,19 +257,19 @@ func BuildConfirmationEmailHTML(data EmailData) (string, string) {
 			linkRow = fmt.Sprintf(`
                 <tr>
                     <td style="padding: 12px 0 0 0;">
-                        <span style="color: #d0c0ad; font-size: 10.5px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 700; display: block; margin-bottom: 4px;">🔗 Enlace Oficial del Evento:</span>
+                        <span style="color: #7a7065; font-size: 10.5px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 700; display: block; margin-bottom: 4px;">Enlace Oficial del Evento:</span>
                         <p style="margin: 0; word-break: break-all; font-size: 13px;">
-                            <a href="%s" target="_blank" style="color: #f5efe6; text-decoration: underline; font-weight: 600;">%s</a>
+                            <a href="%s" target="_blank" style="color: #0a0b0e; text-decoration: underline; font-weight: 600;">%s</a>
                         </p>
                     </td>
                 </tr>
             `, eventLink, eventLink)
 		}
 
-		badgeTitle := "🔒 ACCESO EXCLUSIVO A EVENTO PRIVADO"
+		badgeTitle := "ACCESO EXCLUSIVO A EVENTO PRIVADO"
 		descText := "Este evento es de carácter estrictamente privado. Tus boletos oficiales con código QR se encuentran adjuntos a este correo para tu acceso al recinto. A continuación encontrarás la información oficial para consultar la página del evento:"
 		if isInstitutional {
-			badgeTitle = "🏛️ CONTROL Y PROTOCOLO INSTITUCIONAL"
+			badgeTitle = "CONTROL Y PROTOCOLO INSTITUCIONAL"
 			descText = "Este evento cuenta con control estricto de acreditación y aforo reservado. Su invitación oficial digital se encuentra adjunta a este correo para su validación en puerta. Puede consultar el programa protocolario en el siguiente enlace:"
 		}
 
@@ -264,13 +277,13 @@ func BuildConfirmationEmailHTML(data EmailData) (string, string) {
                     <!-- Private Event Information Block -->
                     <tr>
                         <td style="padding: 0 30px 20px 30px;">
-                            <table width="100%%" border="0" cellspacing="0" cellpadding="0" style="background-color: #14151c; border-radius: 8px; border: 1px solid rgba(208, 192, 173, 0.35); padding: 22px;">
+                            <table width="100%%" border="0" cellspacing="0" cellpadding="0" style="background-color: #F7F4ED; border-radius: 8px; border: 1px solid rgba(10, 11, 14, 0.14); padding: 22px;">
                                 <tr>
                                     <td>
                                         <div style="margin-bottom: 12px;">
-                                            <span style="display: inline-block; background-color: #0a0b0e; color: #d0c0ad; border: 1px solid rgba(208, 192, 173, 0.4); padding: 4px 12px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; border-radius: 4px;">%s</span>
+                                            <span style="display: inline-block; background-color: #0a0b0e; color: #d0c0ad; border: 1px solid #0a0b0e; padding: 4px 12px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; border-radius: 4px;">%s</span>
                                         </div>
-                                        <p style="margin: 0 0 12px 0; color: #d0c0ad; font-size: 13px; line-height: 1.6; font-weight: 400;">
+                                        <p style="margin: 0 0 12px 0; color: #3d3731; font-size: 13px; line-height: 1.6; font-weight: 400;">
                                             %s
                                         </p>
                                         <table width="100%%" border="0" cellspacing="0" cellpadding="0">
@@ -301,18 +314,18 @@ func BuildConfirmationEmailHTML(data EmailData) (string, string) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Confirmación Oficial · Roveni</title>
 </head>
-<body style="margin: 0; padding: 0; background-color: #050608; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; color: #f5efe6;">
-    <table width="100%%" border="0" cellspacing="0" cellpadding="0" style="background-color: #050608; padding: 40px 15px;">
+<body style="margin: 0; padding: 0; background-color: #F7F4ED; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; color: #0a0b0e;">
+    <table width="100%%" border="0" cellspacing="0" cellpadding="0" style="background-color: #F7F4ED; padding: 40px 15px;">
         <tr>
             <td align="center">
-                <table width="600" border="0" cellspacing="0" cellpadding="0" style="background-color: #0e0f14; border-radius: 12px; border: 1px solid rgba(208, 192, 173, 0.22); overflow: hidden; box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);">
+                <table width="600" border="0" cellspacing="0" cellpadding="0" style="background-color: #FFFFFF; border-radius: 12px; border: 1px solid #d0c0ad; overflow: hidden; box-shadow: 0 12px 35px rgba(10, 11, 14, 0.08);">
                     <!-- Header Bar -->
                     <tr>
-                        <td align="center" style="padding: 34px 20px; background-color: #0a0b0e; border-bottom: 1px solid rgba(208, 192, 173, 0.18);">
-                            <div style="font-family: 'Playfair Display', Georgia, 'Times New Roman', serif; font-size: 24px; font-weight: 700; color: #d0c0ad; letter-spacing: 5px; text-transform: uppercase;">
+                        <td align="center" style="padding: 34px 20px; background-color: #d0c0ad; border-bottom: 1px solid rgba(10, 11, 14, 0.15);">
+                            <div style="font-family: 'Playfair Display', Georgia, 'Times New Roman', serif; font-size: 24px; font-weight: 700; color: #0a0b0e; letter-spacing: 5px; text-transform: uppercase;">
                                 ROVENI
                             </div>
-                            <div style="font-size: 10px; font-weight: 600; color: #8e8275; letter-spacing: 3px; text-transform: uppercase; margin-top: 6px;">
+                            <div style="font-size: 10px; font-weight: 600; color: #4a463f; letter-spacing: 3px; text-transform: uppercase; margin-top: 6px;">
                                 EL ACCESO A LO EXTRAORDINARIO
                             </div>
                         </td>
@@ -320,41 +333,41 @@ func BuildConfirmationEmailHTML(data EmailData) (string, string) {
 
                     <!-- Success Banner -->
                     <tr>
-                        <td style="padding: 32px 30px 24px 30px; text-align: center;">
+                        <td style="padding: 34px 30px 24px 30px; text-align: center;">
                             %s
-                            <h2 style="margin: 0 0 12px 0; font-size: 24px; color: #f5efe6; font-weight: 700; font-family: 'Playfair Display', Georgia, serif; letter-spacing: 0.5px;">%s</h2>
-                            <p style="margin: 0 auto; color: #a3998e; font-size: 13.5px; line-height: 1.6; max-width: 500px;">%s</p>
+                            <h2 style="margin: 0 0 12px 0; font-size: 24px; color: #0a0b0e; font-weight: 700; font-family: 'Playfair Display', Georgia, serif; letter-spacing: 0.5px;">%s</h2>
+                            <p style="margin: 0 auto; color: #5a544b; font-size: 13.5px; line-height: 1.6; max-width: 500px;">%s</p>
                         </td>
                     </tr>
 
                     <!-- Event Info Card -->
                     <tr>
                         <td style="padding: 0 30px 20px 30px;">
-                            <table width="100%%" border="0" cellspacing="0" cellpadding="0" style="background-color: #14151c; border-radius: 8px; border: 1px solid rgba(208, 192, 173, 0.22); padding: 22px;">
+                            <table width="100%%" border="0" cellspacing="0" cellpadding="0" style="background-color: #F7F4ED; border-radius: 8px; border: 1px solid rgba(10, 11, 14, 0.12); padding: 22px;">
                                 <tr>
                                     <td>
-                                        <h3 style="margin: 0 0 16px 0; color: #f5efe6; font-size: 20px; font-weight: 700; line-height: 1.35; font-family: 'Playfair Display', Georgia, serif;">%s</h3>
+                                        <h3 style="margin: 0 0 16px 0; color: #0a0b0e; font-size: 20px; font-weight: 700; line-height: 1.35; font-family: 'Playfair Display', Georgia, serif;">%s</h3>
                                         
                                         <table width="100%%" border="0" cellspacing="0" cellpadding="0" style="font-size: 13px; line-height: 1.6;">
                                             <tr>
                                                 <td width="24" valign="top" style="padding: 4px 0; font-size: 14px;">📍</td>
                                                 <td style="padding: 4px 0;">
-                                                    <span style="color: #8e8275; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; font-weight: 700; display: block;">Recinto & Ubicación:</span>
-                                                    <span style="color: #e8dfd5; font-size: 13.5px; font-weight: 500;">%s (%s)</span>
+                                                    <span style="color: #7a7065; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; font-weight: 700; display: block;">Recinto & Ubicación:</span>
+                                                    <span style="color: #0a0b0e; font-size: 13.5px; font-weight: 600;">%s (%s)</span>
                                                 </td>
                                             </tr>
                                             <tr>
                                                 <td width="24" valign="top" style="padding: 6px 0 4px 0; font-size: 14px;">📅</td>
                                                 <td style="padding: 6px 0 4px 0;">
-                                                    <span style="color: #8e8275; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; font-weight: 700; display: block;">Fecha & Hora de Inicio:</span>
-                                                    <span style="color: #e8dfd5; font-size: 13.5px; font-weight: 500;">%s a las %s hrs</span>
+                                                    <span style="color: #7a7065; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; font-weight: 700; display: block;">Fecha & Hora de Inicio:</span>
+                                                    <span style="color: #0a0b0e; font-size: 13.5px; font-weight: 600;">%s a las %s hrs</span>
                                                 </td>
                                             </tr>
                                             <tr>
                                                 <td width="24" valign="top" style="padding: 6px 0 0 0; font-size: 14px;">🎟️</td>
                                                 <td style="padding: 6px 0 0 0;">
-                                                    <span style="color: #8e8275; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; font-weight: 700; display: block;">Folio Oficial:</span>
-                                                    <span style="font-family: 'Courier New', Courier, monospace; font-size: 15px; font-weight: bold; color: #d0c0ad; letter-spacing: 1.5px;">%s</span>
+                                                    <span style="color: #7a7065; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; font-weight: 700; display: block;">Folio Oficial:</span>
+                                                    <span style="display: inline-block; font-family: 'Courier New', Courier, monospace; font-size: 14px; font-weight: bold; color: #0a0b0e; background-color: #e8dfd5; padding: 2px 8px; border-radius: 4px; border: 1px solid rgba(10, 11, 14, 0.12); letter-spacing: 1.5px;">%s</span>
                                                 </td>
                                             </tr>
                                         </table>
@@ -369,13 +382,13 @@ func BuildConfirmationEmailHTML(data EmailData) (string, string) {
                     <!-- PDF Attachments Notice -->
                     <tr>
                         <td style="padding: 0 30px 20px 30px;">
-                            <table width="100%%" border="0" cellspacing="0" cellpadding="0" style="background-color: rgba(208, 192, 173, 0.05); border: 1px dashed rgba(208, 192, 173, 0.3); border-radius: 8px; padding: 16px;">
+                            <table width="100%%" border="0" cellspacing="0" cellpadding="0" style="background-color: #FAF8F5; border: 1px dashed rgba(10, 11, 14, 0.22); border-radius: 8px; padding: 16px;">
                                 <tr>
                                     <td align="center">
-                                        <div style="color: #d0c0ad; font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 4px;">
-                                            📎 BOLETOS DIGITALES ADJUNTOS EN FORMATO PDF
+                                        <div style="color: #0a0b0e; font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 4px;">
+                                            BOLETOS DIGITALES ADJUNTOS EN FORMATO PDF
                                         </div>
-                                        <div style="color: #9e9488; font-size: 12px; line-height: 1.5;">
+                                        <div style="color: #5a544b; font-size: 12px; line-height: 1.5;">
                                             Tus pases de acceso con código QR de seguridad se encuentran adjuntos a este mensaje. Puedes descargarlos o presentarlos directamente desde tu dispositivo móvil en el acceso.
                                         </div>
                                     </td>
@@ -387,21 +400,21 @@ func BuildConfirmationEmailHTML(data EmailData) (string, string) {
                     <!-- Add to Calendar Block -->
                     <tr>
                         <td style="padding: 0 30px 25px 30px;">
-                            <table width="100%%" border="0" cellspacing="0" cellpadding="0" style="background-color: #101116; border-radius: 8px; border: 1px solid rgba(208, 192, 173, 0.15); padding: 18px;">
+                            <table width="100%%" border="0" cellspacing="0" cellpadding="0" style="background-color: #F7F4ED; border-radius: 8px; border: 1px solid rgba(10, 11, 14, 0.12); padding: 18px;">
                                 <tr>
                                     <td align="center">
-                                        <h4 style="margin: 0 0 6px 0; color: #d0c0ad; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 2px;">📅 Agrega este evento a tu calendario</h4>
-                                        <p style="margin: 0 0 14px 0; color: #8e8275; font-size: 12px;">Sincroniza la fecha y hora directamente en tu aplicación preferida:</p>
+                                        <h4 style="margin: 0 0 6px 0; color: #0a0b0e; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 2px;">📅 Agrega este evento a tu calendario</h4>
+                                        <p style="margin: 0 0 14px 0; color: #6e665b; font-size: 12px;">Sincroniza la fecha y hora directamente en tu aplicación preferida:</p>
                                         <table border="0" cellspacing="0" cellpadding="0">
                                             <tr>
                                                 <td style="padding: 0 4px;">
-                                                    <a href="%s" target="_blank" style="display: inline-block; background-color: #16171d; border: 1px solid rgba(208, 192, 173, 0.35); color: #d0c0ad; text-decoration: none; padding: 7px 14px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px;">Google Calendar</a>
+                                                    <a href="%s" target="_blank" style="display: inline-block; background-color: #0a0b0e; border: 1px solid #0a0b0e; color: #d0c0ad; text-decoration: none; padding: 7px 14px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px;">Google Calendar</a>
                                                 </td>
                                                 <td style="padding: 0 4px;">
-                                                    <a href="%s" target="_blank" style="display: inline-block; background-color: #16171d; border: 1px solid rgba(208, 192, 173, 0.35); color: #d0c0ad; text-decoration: none; padding: 7px 14px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px;">Outlook</a>
+                                                    <a href="%s" target="_blank" style="display: inline-block; background-color: #0a0b0e; border: 1px solid #0a0b0e; color: #d0c0ad; text-decoration: none; padding: 7px 14px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px;">Outlook</a>
                                                 </td>
                                                 <td style="padding: 0 4px;">
-                                                    <a href="%s" target="_blank" style="display: inline-block; background-color: #16171d; border: 1px solid rgba(208, 192, 173, 0.35); color: #d0c0ad; text-decoration: none; padding: 7px 14px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px;">Apple Calendar</a>
+                                                    <a href="%s" target="_blank" style="display: inline-block; background-color: #0a0b0e; border: 1px solid #0a0b0e; color: #d0c0ad; text-decoration: none; padding: 7px 14px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px;">Apple Calendar</a>
                                                 </td>
                                             </tr>
                                         </table>
@@ -411,39 +424,20 @@ func BuildConfirmationEmailHTML(data EmailData) (string, string) {
                         </td>
                     </tr>
 
-                    <!-- Ticket Breakdown -->
-                    <tr>
-                        <td style="padding: 0 30px 30px 30px;">
-                            <div style="margin: 0 0 12px 0; color: #8e8275; font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 700;">Desglose de Accesos</div>
-                            <table width="100%%" border="0" cellspacing="0" cellpadding="0" style="border-collapse: collapse; border: 1px solid rgba(208, 192, 173, 0.15); border-radius: 6px; overflow: hidden;">
-                                <thead>
-                                    <tr style="background-color: #14151c; border-bottom: 1px solid rgba(208, 192, 173, 0.2);">
-                                        <th align="left" style="padding: 10px 14px; color: #8e8275; font-size: 10.5px; text-transform: uppercase; letter-spacing: 1px; font-weight: 700;">Concepto</th>
-                                        <th align="center" style="padding: 10px 14px; color: #8e8275; font-size: 10.5px; text-transform: uppercase; letter-spacing: 1px; font-weight: 700;">Cant.</th>
-                                        <th align="right" style="padding: 10px 14px; color: #8e8275; font-size: 10.5px; text-transform: uppercase; letter-spacing: 1px; font-weight: 700;">Total</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    %s
-                                </tbody>
-                            </table>
-
-                            %s
-                        </td>
-                    </tr>
+%s
 
                     <!-- Footer -->
                     <tr>
-                        <td align="center" style="padding: 28px 20px; background-color: #0a0b0e; border-top: 1px solid rgba(208, 192, 173, 0.15); color: #7a7065; font-size: 12px; line-height: 1.6;">
-                            <div style="font-family: 'Playfair Display', Georgia, serif; font-size: 14px; font-weight: 700; color: #d0c0ad; letter-spacing: 3px; text-transform: uppercase; margin-bottom: 4px;">
+                        <td align="center" style="padding: 28px 20px; background-color: #d0c0ad; border-top: 1px solid rgba(10, 11, 14, 0.15); color: #5a544b; font-size: 12px; line-height: 1.6;">
+                            <div style="font-family: 'Playfair Display', Georgia, serif; font-size: 15px; font-weight: 700; color: #0a0b0e; letter-spacing: 4px; text-transform: uppercase; margin-bottom: 4px;">
                                 ROVENI
                             </div>
-                            <div style="font-size: 10px; color: #8e8275; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 12px;">
+                            <div style="font-size: 10px; color: #4a463f; letter-spacing: 2.5px; text-transform: uppercase; margin-bottom: 12px; font-weight: 600;">
                                 EL ACCESO A LO EXTRAORDINARIO
                             </div>
-                            <p style="margin: 0 0 6px 0; color: #7a7065; font-size: 11px;">© 2026 Roveni. Todos los derechos reservados.</p>
-                            <p style="margin: 0; font-size: 11px; color: #8e8275;">
-                                Consultas oficiales: <a href="mailto:info@rovenisociety.com" style="color: #d0c0ad; text-decoration: none;">info@rovenisociety.com</a> • Síguenos en <a href="https://www.instagram.com/rovenisociety/" target="_blank" style="color: #d0c0ad; text-decoration: none;">Instagram</a>
+                            <p style="margin: 0 0 6px 0; color: #5a544b; font-size: 11px;">© 2026 Roveni. Todos los derechos reservados.</p>
+                            <p style="margin: 0; font-size: 11px; color: #4a463f;">
+                                Consultas oficiales: <a href="mailto:info@rovenisociety.com" style="color: #0a0b0e; text-decoration: underline; font-weight: 600;">info@rovenisociety.com</a> • Síguenos en <a href="https://www.instagram.com/rovenisociety/" target="_blank" style="color: #0a0b0e; text-decoration: underline; font-weight: 600;">Instagram</a>
                             </p>
                         </td>
                     </tr>
@@ -466,19 +460,48 @@ func BuildConfirmationEmailHTML(data EmailData) (string, string) {
 		googleURL,
 		outlookURL,
 		iCalEndpoint,
-		ticketRows.String(),
-		totalsHTML,
+		breakdownBlock,
 	)
 
 	return subject, htmlBody
 }
 
+// FormatSenderHeader parses and formats a sender display name and email address according to RFC 5322.
+// It returns envelopeEmail (clean email for SMTP envelope MAIL FROM) and headerFrom (display name + email for MIME headers).
+func FormatSenderHeader(senderName, rawFrom string) (envelopeEmail string, headerFrom string) {
+	rawFrom = strings.TrimSpace(rawFrom)
+	if rawFrom == "" {
+		rawFrom = "info@rovenisociety.com"
+	}
+
+	envelopeEmail = rawFrom
+	name := strings.TrimSpace(senderName)
+
+	if parsed, err := mail.ParseAddress(rawFrom); err == nil {
+		if name == "" {
+			name = parsed.Name
+		}
+		envelopeEmail = parsed.Address
+	}
+
+	if name == "" {
+		name = strings.TrimSpace(os.Getenv("SMTP_FROM_NAME"))
+	}
+	if name == "" {
+		name = "Roveni Society"
+	}
+
+	headerFrom = (&mail.Address{
+		Name:    name,
+		Address: envelopeEmail,
+	}).String()
+
+	return envelopeEmail, headerFrom
+}
+
 // SendPurchaseConfirmationEmail sends a confirmation email to the buyer with order, ticket details and PDF attachments.
 func SendPurchaseConfirmationEmail(data EmailData) error {
-	smtpFrom := strings.TrimSpace(os.Getenv("SMTP_FROM"))
-	if smtpFrom == "" {
-		smtpFrom = "info@rovenisociety.com"
-	}
+	envelopeFrom, fromHeader := FormatSenderHeader(data.SenderName, os.Getenv("SMTP_FROM"))
 
 	subject, htmlBody := BuildConfirmationEmailHTML(data)
 	start, end := ParseEventTimes(data.EventDate, data.ShowTime)
@@ -486,7 +509,7 @@ func SendPurchaseConfirmationEmail(data EmailData) error {
 	boundary := "---ROVENI_MIME_BOUNDARY_2026---"
 
 	var msgBuilder strings.Builder
-	msgBuilder.WriteString(fmt.Sprintf("From: %s\r\n", smtpFrom))
+	msgBuilder.WriteString(fmt.Sprintf("From: %s\r\n", fromHeader))
 	msgBuilder.WriteString(fmt.Sprintf("To: %s\r\n", data.To))
 	msgBuilder.WriteString(fmt.Sprintf("Bcc: %s\r\n", "evidencia@rovenisociety.com"))
 	msgBuilder.WriteString(fmt.Sprintf("Subject: %s\r\n", subject))
@@ -560,7 +583,6 @@ func SendPurchaseConfirmationEmail(data EmailData) error {
 	smtpPortRaw := os.Getenv("SMTP_PORT")
 	smtpUsername := strings.TrimSpace(os.Getenv("SMTP_USERNAME"))
 	smtpPassword := strings.TrimSpace(os.Getenv("SMTP_PASSWORD"))
-	smtpFrom = strings.TrimSpace(os.Getenv("SMTP_FROM"))
 
 	hostClean, extractedPort := cleanSMTPHost(smtpHostRaw)
 	if hostClean == "" {
@@ -575,11 +597,8 @@ func SendPurchaseConfirmationEmail(data EmailData) error {
 			smtpPort = "465"
 		}
 	}
-	if smtpFrom == "" {
-		smtpFrom = "info@rovenisociety.com"
-	}
 	if smtpUsername == "" {
-		smtpUsername = smtpFrom
+		smtpUsername = envelopeFrom
 	}
 
 	recipients := []string{data.To}
@@ -591,8 +610,8 @@ func SendPurchaseConfirmationEmail(data EmailData) error {
 		recipients = append(recipients, bccEmail)
 	}
 
-	log.Printf("[SMTP INFO] Attempting email delivery via %s:%s (From: %s, To: %v)...", hostClean, smtpPort, smtpFrom, recipients)
-	err := sendMailViaPort(hostClean, smtpPort, smtpUsername, smtpPassword, smtpFrom, recipients, msg)
+	log.Printf("[SMTP INFO] Attempting email delivery via %s:%s (From: %s, To: %v)...", hostClean, smtpPort, fromHeader, recipients)
+	err := sendMailViaPort(hostClean, smtpPort, smtpUsername, smtpPassword, envelopeFrom, recipients, msg)
 	if err != nil {
 		log.Printf("[SMTP WARNING] Primary delivery via %s:%s failed: %v", hostClean, smtpPort, err)
 
@@ -602,7 +621,7 @@ func SendPurchaseConfirmationEmail(data EmailData) error {
 			fallbackPort = "465"
 		}
 		log.Printf("[SMTP INFO] Retrying via fallback port %s...", fallbackPort)
-		fallbackErr := sendMailViaPort(hostClean, fallbackPort, smtpUsername, smtpPassword, smtpFrom, recipients, msg)
+		fallbackErr := sendMailViaPort(hostClean, fallbackPort, smtpUsername, smtpPassword, envelopeFrom, recipients, msg)
 		if fallbackErr != nil {
 			log.Printf("[SMTP ERROR] Both primary (%s:%s) and fallback (%s:%s) SMTP attempts failed. Primary err: %v | Fallback err: %v", hostClean, smtpPort, hostClean, fallbackPort, err, fallbackErr)
 			return fmt.Errorf("smtp delivery failed (primary: %v, fallback: %v)", err, fallbackErr)

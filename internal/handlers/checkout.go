@@ -670,6 +670,7 @@ func ConfirmCheckoutHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 							Price:            price,
 							Currency:         currency,
 							SeatLabel:        sLabel,
+							IsPrivate:        isPrivate,
 							TicketDesignMode: designMode,
 							TicketAdImage:    ticketAdImageURL,
 						})
@@ -809,6 +810,7 @@ func DownloadTicketsPDFHandler(db *sql.DB) http.HandlerFunc {
 						Currency:         currency,
 						SeatLabel:        sLabel,
 						IsCourtesy:       isCourtesy && !isInstitutionalInvitation,
+						IsPrivate:        isPrivate,
 						TicketDesignMode: designMode,
 						TicketAdImage:    ticketAdImageURL,
 					})
@@ -936,6 +938,7 @@ func DownloadTicketsZipHandler(db *sql.DB) http.HandlerFunc {
 						Currency:         currency,
 						SeatLabel:        sLabel,
 						IsCourtesy:       isCourtesy && !isInstitutionalInvitation,
+						IsPrivate:        isPrivate,
 						TicketDesignMode: designMode,
 						TicketAdImage:    ticketAdImageURL,
 					})

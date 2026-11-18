@@ -1,6 +1,7 @@
 package mailer
 
 import (
+	"net/mail"
 	"os"
 	"strings"
 	"testing"
@@ -35,7 +36,7 @@ func TestBuildConfirmationEmailHTML(t *testing.T) {
 				IsPrivate: false,
 			},
 			mustContain: []string{
-				"ROVENI SOCIETY",
+				"ROVENI",
 				"EL ACCESO A LO EXTRAORDINARIO",
 				"Bienvenido(a), Alejandro Garza",
 				"Teatro Degollado",
@@ -71,16 +72,17 @@ func TestBuildConfirmationEmailHTML(t *testing.T) {
 				AccessCode:  "PROTOCOLO-2026",
 			},
 			mustContain: []string{
-				"INVITACIÓN OFICIAL · ACREDITACIÓN NOMINAL",
+				"INVITACIÓN OFICIAL",
 				"Distinguido(a) Dr. Ricardo Villanueva",
 				"acto solemne",
-				"Modalidad de Ingreso:",
-				"Invitación Oficial Acreditada",
 				"PROTOCOLO-2026",
 			},
 			mustNotConta: []string{
 				"100%%",
 				"Total Pagado:",
+				"Desglose de Accesos",
+				"Modalidad de Ingreso:",
+				"Costo de Acreditación:",
 			},
 		},
 		{
@@ -171,7 +173,86 @@ func TestBuildConfirmationEmailHTML(t *testing.T) {
 
 			// Write sample output for review
 			cleanName := strings.ReplaceAll(tc.name, " ", "_")
+			cleanName = strings.ReplaceAll(cleanName, "/", "_")
 			_ = os.WriteFile("/tmp/roveni_email_"+cleanName+".html", []byte(html), 0644)
+		})
+	}
+}
+
+func TestFormatSenderHeader(t *testing.T) {
+	tests := []struct {
+		name         string
+		senderName   string
+		rawFrom      string
+		envName      string
+		wantEnvelope string
+		wantName     string
+	}{
+		{
+			name:         "Default settings",
+			senderName:   "",
+			rawFrom:      "",
+			envName:      "",
+			wantEnvelope: "info@rovenisociety.com",
+			wantName:     "Roveni",
+		},
+		{
+			name:         "Custom sender name from data",
+			senderName:   "Roveni Society",
+			rawFrom:      "info@rovenisociety.com",
+			envName:      "",
+			wantEnvelope: "info@rovenisociety.com",
+			wantName:     "Roveni Society",
+		},
+		{
+			name:         "Institutional organizer sender name with accents",
+			senderName:   "Federación Estudiantil Universitaria",
+			rawFrom:      "info@rovenisociety.com",
+			envName:      "",
+			wantEnvelope: "info@rovenisociety.com",
+			wantName:     "Federación Estudiantil Universitaria",
+		},
+		{
+			name:         "Configured via SMTP_FROM_NAME environment variable",
+			senderName:   "",
+			rawFrom:      "info@rovenisociety.com",
+			envName:      "Roveni Concierge",
+			wantEnvelope: "info@rovenisociety.com",
+			wantName:     "Roveni Concierge",
+		},
+		{
+			name:         "Formatted RFC address in rawFrom",
+			senderName:   "",
+			rawFrom:      "Roveni Events <notificaciones@rovenisociety.com>",
+			envName:      "",
+			wantEnvelope: "notificaciones@rovenisociety.com",
+			wantName:     "Roveni Events",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.envName != "" {
+				t.Setenv("SMTP_FROM_NAME", tc.envName)
+			} else {
+				t.Setenv("SMTP_FROM_NAME", "")
+			}
+
+			envelope, header := FormatSenderHeader(tc.senderName, tc.rawFrom)
+			if envelope != tc.wantEnvelope {
+				t.Errorf("expected envelope %q, got %q", tc.wantEnvelope, envelope)
+			}
+
+			parsed, err := mail.ParseAddress(header)
+			if err != nil {
+				t.Fatalf("failed to parse generated header %q: %v", header, err)
+			}
+			if parsed.Name != tc.wantName {
+				t.Errorf("expected sender name %q, got %q", tc.wantName, parsed.Name)
+			}
+			if parsed.Address != tc.wantEnvelope {
+				t.Errorf("expected sender email %q, got %q", tc.wantEnvelope, parsed.Address)
+			}
 		})
 	}
 }
