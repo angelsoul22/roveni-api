@@ -85,6 +85,49 @@ func GetEventSeatsHandler(db *sql.DB) http.HandlerFunc {
 
 		sessionID := strings.TrimSpace(r.URL.Query().Get("session_id"))
 
+		// Check if this event's venue has mapped seating
+		var venueAddress, eventName string
+		err = db.QueryRow(`SELECT COALESCE(venue_address, ''), COALESCE(name, '') FROM events WHERE id = $1`, eventID).Scan(&venueAddress, &eventName)
+		if err != nil {
+			http.Error(w, `{"error": "evento no encontrado"}`, http.StatusNotFound)
+			return
+		}
+
+		var matchedVenue string
+		_ = db.QueryRow(`
+			SELECT DISTINCT s.venue_name 
+			FROM seats s
+			WHERE LOWER($1) LIKE '%' || LOWER(s.venue_name) || '%' 
+			   OR LOWER($2) LIKE '%' || LOWER(s.venue_name) || '%'
+			   OR (LOWER(s.venue_name) = 'auditorio charles chaplin' AND (LOWER($1) LIKE '%chaplin%' OR LOWER($2) LIKE '%chaplin%'))
+			LIMIT 1
+		`, venueAddress, eventName).Scan(&matchedVenue)
+
+		// Check if there are explicit seats mapped for this event in event_seats if not matched by venue name
+		if matchedVenue == "" {
+			var hasExplicitSeats bool
+			_ = db.QueryRow(`SELECT EXISTS(SELECT 1 FROM event_seats WHERE event_id = $1)`, eventID).Scan(&hasExplicitSeats)
+			if hasExplicitSeats {
+				_ = db.QueryRow(`
+					SELECT s.venue_name FROM seats s
+					JOIN event_seats es ON es.seat_id = s.id AND es.event_id = $1
+					LIMIT 1
+				`, eventID).Scan(&matchedVenue)
+			}
+		}
+
+		// Si el recinto no tiene acceso mapeado, devolver lista vacía
+		if matchedVenue == "" {
+			resp := GetSeatsResponse{
+				EventID:             eventID,
+				VenueName:           "",
+				HoldDurationSeconds: 300,
+				Seats:               []SeatResponse{},
+			}
+			json.NewEncoder(w).Encode(resp)
+			return
+		}
+
 		// Auto-release expired holds for this event
 		_, _ = db.Exec(`
 			UPDATE event_seats 
@@ -100,11 +143,11 @@ func GetEventSeatsHandler(db *sql.DB) http.HandlerFunc {
 				es.locked_until
 			FROM seats s
 			LEFT JOIN event_seats es ON es.seat_id = s.id AND es.event_id = $1
-			WHERE s.venue_name = 'Auditorio Charles Chaplin'
+			WHERE s.venue_name = $2
 			ORDER BY s.row_label ASC, s.seat_number ASC
 		`
 
-		rows, err := db.Query(query, eventID)
+		rows, err := db.Query(query, eventID, matchedVenue)
 		if err != nil {
 			http.Error(w, fmt.Sprintf(`{"error": "Error al consultar asientos: %v"}`, err), http.StatusInternalServerError)
 			return
@@ -143,7 +186,7 @@ func GetEventSeatsHandler(db *sql.DB) http.HandlerFunc {
 
 		resp := GetSeatsResponse{
 			EventID:             eventID,
-			VenueName:           "Auditorio Charles Chaplin",
+			VenueName:           matchedVenue,
 			HoldDurationSeconds: 300, // 5 minutes
 			Seats:               seatsList,
 		}

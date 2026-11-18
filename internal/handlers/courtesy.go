@@ -114,12 +114,14 @@ func IssueCourtesyTicketHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc 
 		var organizerID int64
 		var eventName, imageURL, venueAddress, city, country, eventDate, doorsOpenTime, showTime, currency string
 		var courtesyQuota int
+		var isPrivate bool
+		var privateType, ticketAdImageURL, accessCode string
 
 		err = db.QueryRow(`
-			SELECT organizer_id, name, COALESCE(image_url, ''), venue_address, city, country, event_date, doors_open_time, show_start_time, COALESCE(currency, 'USD'), COALESCE(courtesy_quota, 0)
+			SELECT organizer_id, name, COALESCE(image_url, ''), venue_address, city, country, event_date, doors_open_time, show_start_time, COALESCE(currency, 'USD'), COALESCE(courtesy_quota, 0), COALESCE(is_private, false), COALESCE(private_type, 'interactivo'), COALESCE(ticket_ad_image_url, ''), COALESCE(access_code, '')
 			FROM events WHERE id = $1
 		`, req.EventID).Scan(
-			&organizerID, &eventName, &imageURL, &venueAddress, &city, &country, &eventDate, &doorsOpenTime, &showTime, &currency, &courtesyQuota,
+			&organizerID, &eventName, &imageURL, &venueAddress, &city, &country, &eventDate, &doorsOpenTime, &showTime, &currency, &courtesyQuota, &isPrivate, &privateType, &ticketAdImageURL, &accessCode,
 		)
 		if err != nil {
 			if err == sql.ErrNoRows {
@@ -327,17 +329,28 @@ func IssueCourtesyTicketHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc 
 						Quantity: qty,
 						Price:    0.00,
 					})
+					isInstitutionalInvitation := isPrivate && strings.ToLower(privateType) == "solo_lectura"
+					categoryDisplay := tName
+					designMode := "cortesia"
+					if isInstitutionalInvitation {
+						designMode = "invitacion"
+					} else {
+						categoryDisplay = tName + " (CORTESÍA)"
+					}
+
 					for q := 0; q < qty; q++ {
 						pdfTicketList = append(pdfTicketList, tickets.TicketPDFData{
-							OrderNumber:   orderNumber,
-							TicketSerial:  fmt.Sprintf("%s-%02d", orderNumber, ticketSerialIndex),
-							CategoryName:  tName + " (CORTESÍA)",
-							CustomerName:  req.RecipientName,
-							CustomerEmail: req.RecipientEmail,
-							Price:         0.00,
-							Currency:      currency,
-							SeatLabel:     sLabel,
-							IsCourtesy:    true,
+							OrderNumber:      orderNumber,
+							TicketSerial:     fmt.Sprintf("%s-%02d", orderNumber, ticketSerialIndex),
+							CategoryName:     categoryDisplay,
+							CustomerName:     req.RecipientName,
+							CustomerEmail:    req.RecipientEmail,
+							Price:            0.00,
+							Currency:         currency,
+							SeatLabel:        sLabel,
+							IsCourtesy:       !isInstitutionalInvitation,
+							TicketDesignMode: designMode,
+							TicketAdImage:    ticketAdImageURL,
 						})
 						ticketSerialIndex++
 					}
@@ -375,6 +388,10 @@ func IssueCourtesyTicketHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc 
 				TotalAmount:    0.00,
 				Currency:       currency,
 				PdfAttachments: pdfPaths,
+				IsCourtesy:     true,
+				IsPrivate:      isPrivate,
+				PrivateType:    privateType,
+				AccessCode:     accessCode,
 			}
 			if errMail := mailer.SendPurchaseConfirmationEmail(emailData); errMail != nil {
 				log.Printf("[COURTESY MAIL ERROR] Failed to send email to %s: %v", req.RecipientEmail, errMail)

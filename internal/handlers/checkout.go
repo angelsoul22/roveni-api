@@ -403,12 +403,13 @@ func ConfirmCheckoutHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 		log.Printf("[SECURITY SUCCESS] Verified Stripe PaymentIntent %s status 'succeeded' with amount %d %s!", pi.ID, pi.AmountReceived, pi.Currency)
 
 		// Query Event details for email and confirmation summary
-		var eventName, eventImage, eventDate, doorsOpenTime, showTime, venueAddress, city, country string
+		var eventName, eventImage, eventDate, doorsOpenTime, showTime, venueAddress, city, country, ticketAdImageURL, privateType, accessCode string
+		var isPrivate bool
 		err := db.QueryRow(`
-			SELECT name, COALESCE(image_url, ''), event_date, doors_open_time, show_start_time, venue_address, city, country 
+			SELECT name, COALESCE(image_url, ''), event_date, doors_open_time, show_start_time, venue_address, city, country, COALESCE(ticket_ad_image_url, ''), COALESCE(is_private, false), COALESCE(private_type, 'interactivo'), COALESCE(access_code, '') 
 			FROM events 
 			WHERE id = $1
-		`, req.EventID).Scan(&eventName, &eventImage, &eventDate, &doorsOpenTime, &showTime, &venueAddress, &city, &country)
+		`, req.EventID).Scan(&eventName, &eventImage, &eventDate, &doorsOpenTime, &showTime, &venueAddress, &city, &country, &ticketAdImageURL, &isPrivate, &privateType, &accessCode)
 
 		if err != nil {
 			log.Printf("[CONFIRM ERROR] Querying event %d failed: %v", req.EventID, err)
@@ -638,6 +639,12 @@ func ConfirmCheckoutHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 
 		log.Printf("[CONFIRM SUCCESS] Order %s (ID %d) saved to DB! Ticket capacity deducted successfully.", req.OrderNumber, purchaseID)
 
+		isInstitutionalInvitation := isPrivate && strings.ToLower(strings.TrimSpace(privateType)) == "solo_lectura"
+		designMode := ""
+		if isInstitutionalInvitation {
+			designMode = "invitacion"
+		}
+
 		// Generate 1 PDF ticket per unit purchased with exact seat_label
 		var pdfTicketList []tickets.TicketPDFData
 		itemRows, errItems := db.Query(`
@@ -655,14 +662,16 @@ func ConfirmCheckoutHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 				if errScan := itemRows.Scan(&tName, &price, &qty, &sLabel); errScan == nil {
 					for q := 0; q < qty; q++ {
 						pdfTicketList = append(pdfTicketList, tickets.TicketPDFData{
-							OrderNumber:   req.OrderNumber,
-							TicketSerial:  fmt.Sprintf("%s-%02d", req.OrderNumber, ticketSerialIndex),
-							CategoryName:  tName,
-							CustomerName:  req.CustomerName,
-							CustomerEmail: req.CustomerEmail,
-							Price:         price,
-							Currency:      currency,
-							SeatLabel:     sLabel,
+							OrderNumber:      req.OrderNumber,
+							TicketSerial:     fmt.Sprintf("%s-%02d", req.OrderNumber, ticketSerialIndex),
+							CategoryName:     tName,
+							CustomerName:     req.CustomerName,
+							CustomerEmail:    req.CustomerEmail,
+							Price:            price,
+							Currency:         currency,
+							SeatLabel:        sLabel,
+							TicketDesignMode: designMode,
+							TicketAdImage:    ticketAdImageURL,
 						})
 						ticketSerialIndex++
 					}
@@ -700,6 +709,10 @@ func ConfirmCheckoutHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 				TotalAmount:    totalAmountTarget,
 				Currency:       currency,
 				PdfAttachments: pdfPaths,
+				IsCourtesy:     false,
+				IsPrivate:      isPrivate,
+				PrivateType:    privateType,
+				AccessCode:     accessCode,
 			}
 			if err := mailer.SendPurchaseConfirmationEmail(emailData); err != nil {
 				log.Printf("[MAILER ERROR] Failed to send email for Order %s: %v", req.OrderNumber, err)
@@ -741,16 +754,25 @@ func DownloadTicketsPDFHandler(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		var eventName, eventImage, eventDate, doorsOpenTime, showStartTime, venueAddress, city, country string
+		var eventName, eventImage, eventDate, doorsOpenTime, showStartTime, venueAddress, city, country, ticketAdImageURL, privateType string
+		var isPrivate bool
 		err = db.QueryRow(`
-			SELECT name, COALESCE(image_url, ''), event_date, doors_open_time, show_start_time, venue_address, city, country 
+			SELECT name, COALESCE(image_url, ''), event_date, doors_open_time, show_start_time, venue_address, city, country, COALESCE(ticket_ad_image_url, ''), COALESCE(is_private, false), COALESCE(private_type, 'interactivo') 
 			FROM events 
 			WHERE id = $1
-		`, eventID).Scan(&eventName, &eventImage, &eventDate, &doorsOpenTime, &showStartTime, &venueAddress, &city, &country)
+		`, eventID).Scan(&eventName, &eventImage, &eventDate, &doorsOpenTime, &showStartTime, &venueAddress, &city, &country, &ticketAdImageURL, &isPrivate, &privateType)
 
 		if err != nil {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Evento no encontrado"})
 			return
+		}
+
+		isInstitutionalInvitation := isPrivate && strings.ToLower(strings.TrimSpace(privateType)) == "solo_lectura"
+		designMode := ""
+		if isInstitutionalInvitation {
+			designMode = "invitacion"
+		} else if isCourtesy {
+			designMode = "cortesia"
 		}
 
 		rows, err := db.Query(`
@@ -772,17 +794,23 @@ func DownloadTicketsPDFHandler(db *sql.DB) http.HandlerFunc {
 			var price float64
 			var qty int
 			if err := rows.Scan(&catName, &price, &qty, &sLabel); err == nil {
+				categoryDisplay := catName
+				if isCourtesy && !isInstitutionalInvitation && !strings.Contains(strings.ToUpper(catName), "CORTES") {
+					categoryDisplay = catName + " (CORTESÍA)"
+				}
 				for q := 0; q < qty; q++ {
 					pdfTicketList = append(pdfTicketList, tickets.TicketPDFData{
-						OrderNumber:   orderNumber,
-						TicketSerial:  fmt.Sprintf("%s-%02d", orderNumber, ticketSerialIndex),
-						CategoryName:  catName,
-						CustomerName:  customerName,
-						CustomerEmail: customerEmail,
-						Price:         price,
-						Currency:      currency,
-						SeatLabel:     sLabel,
-						IsCourtesy:    isCourtesy,
+						OrderNumber:      orderNumber,
+						TicketSerial:     fmt.Sprintf("%s-%02d", orderNumber, ticketSerialIndex),
+						CategoryName:     categoryDisplay,
+						CustomerName:     customerName,
+						CustomerEmail:    customerEmail,
+						Price:            price,
+						Currency:         currency,
+						SeatLabel:        sLabel,
+						IsCourtesy:       isCourtesy && !isInstitutionalInvitation,
+						TicketDesignMode: designMode,
+						TicketAdImage:    ticketAdImageURL,
 					})
 					ticketSerialIndex++
 				}
@@ -856,16 +884,25 @@ func DownloadTicketsZipHandler(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		var eventName, eventImage, venueAddress, city, country, eventDate, doorsOpenTime, showStartTime string
+		var eventName, eventImage, venueAddress, city, country, eventDate, doorsOpenTime, showStartTime, ticketAdImageURL, privateType string
+		var isPrivate bool
 		err = db.QueryRow(`
-			SELECT name, COALESCE(image_url, ''), venue_address, city, country, event_date, doors_open_time, show_start_time 
+			SELECT name, COALESCE(image_url, ''), venue_address, city, country, event_date, doors_open_time, show_start_time, COALESCE(ticket_ad_image_url, ''), COALESCE(is_private, false), COALESCE(private_type, 'interactivo') 
 			FROM events 
 			WHERE id = $1
-		`, eventID).Scan(&eventName, &eventImage, &venueAddress, &city, &country, &eventDate, &doorsOpenTime, &showStartTime)
+		`, eventID).Scan(&eventName, &eventImage, &venueAddress, &city, &country, &eventDate, &doorsOpenTime, &showStartTime, &ticketAdImageURL, &isPrivate, &privateType)
 
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "error al obtener evento"})
 			return
+		}
+
+		isInstitutionalInvitation := isPrivate && strings.ToLower(strings.TrimSpace(privateType)) == "solo_lectura"
+		designMode := ""
+		if isInstitutionalInvitation {
+			designMode = "invitacion"
+		} else if isCourtesy {
+			designMode = "cortesia"
 		}
 
 		rows, err := db.Query(`
@@ -886,15 +923,21 @@ func DownloadTicketsZipHandler(db *sql.DB) http.HandlerFunc {
 			var price float64
 			var qty int
 			if err := rows.Scan(&catName, &price, &qty, &sLabel); err == nil {
+				categoryDisplay := catName
+				if isCourtesy && !isInstitutionalInvitation && !strings.Contains(strings.ToUpper(catName), "CORTES") {
+					categoryDisplay = catName + " (CORTESÍA)"
+				}
 				for q := 0; q < qty; q++ {
 					pdfTicketList = append(pdfTicketList, tickets.TicketPDFData{
-						OrderNumber:  orderNumber,
-						TicketSerial: fmt.Sprintf("%s-%02d", orderNumber, ticketSerialIndex),
-						CategoryName: catName,
-						Price:        price,
-						Currency:     currency,
-						SeatLabel:    sLabel,
-						IsCourtesy:   isCourtesy,
+						OrderNumber:      orderNumber,
+						TicketSerial:     fmt.Sprintf("%s-%02d", orderNumber, ticketSerialIndex),
+						CategoryName:     categoryDisplay,
+						Price:            price,
+						Currency:         currency,
+						SeatLabel:        sLabel,
+						IsCourtesy:       isCourtesy && !isInstitutionalInvitation,
+						TicketDesignMode: designMode,
+						TicketAdImage:    ticketAdImageURL,
 					})
 					ticketSerialIndex++
 				}

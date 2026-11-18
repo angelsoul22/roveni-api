@@ -369,14 +369,20 @@ func LoginOrganizerHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 			return
 		}
 
+		req.Email = strings.TrimSpace(strings.ToLower(req.Email))
+		if req.Email == "" || req.Password == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "correo y contraseña son requeridos"})
+			return
+		}
+
 		var org OrganizerProfile
 		var pwHash string
 
 		err := db.QueryRow(`
 			SELECT u.id, 
-				COALESCE(op.full_name, ''), 
+				COALESCE(op.full_name, cp.full_name, u.email), 
 				u.email, 
-				COALESCE(op.phone, ''), 
+				COALESCE(op.phone, cp.phone, ''), 
 				COALESCE(op.category, ''), 
 				COALESCE(op.city, ''), 
 				u.role, 
@@ -387,7 +393,8 @@ func LoginOrganizerHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 				u.password_hash
 			FROM users u
 			LEFT JOIN organizer_profiles op ON op.user_id = u.id
-			WHERE u.email = $1
+			LEFT JOIN customer_profiles cp ON cp.user_id = u.id
+			WHERE LOWER(TRIM(u.email)) = LOWER(TRIM($1))
 		`, req.Email).Scan(
 			&org.ID, &org.FullName, &org.Email, &org.Phone, &org.Category, &org.City,
 			&org.Role, &org.TypeOrganizer, &org.ExperienceArea, &org.DocumentID, &org.CreatedAt, &pwHash,

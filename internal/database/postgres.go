@@ -7,6 +7,7 @@ import (
 	"time"
 
 	_ "github.com/lib/pq" // Driver de PostgreSQL
+	"golang.org/x/crypto/bcrypt"
 )
 
 func InitDB() (*sql.DB, error) {
@@ -43,6 +44,7 @@ func InitDB() (*sql.DB, error) {
 				if err := createTables(db); err != nil {
 					return nil, fmt.Errorf("error creando tablas: %w", err)
 				}
+				_ = seedInitialAdmin(db)
 				return db, nil
 			}
 		}
@@ -160,6 +162,10 @@ func createTables(db *sql.DB) error {
 	ALTER TABLE events ADD COLUMN IF NOT EXISTS tiktok_url TEXT DEFAULT '';
 	ALTER TABLE events ADD COLUMN IF NOT EXISTS service_fee_percentage NUMERIC(5, 2) DEFAULT 20.00;
 	ALTER TABLE events ADD COLUMN IF NOT EXISTS courtesy_quota INTEGER DEFAULT 0;
+	ALTER TABLE events ADD COLUMN IF NOT EXISTS is_private BOOLEAN DEFAULT FALSE;
+	ALTER TABLE events ADD COLUMN IF NOT EXISTS private_type VARCHAR(20) DEFAULT 'interactivo';
+	ALTER TABLE events ADD COLUMN IF NOT EXISTS access_code VARCHAR(100) DEFAULT '';
+	ALTER TABLE events ADD COLUMN IF NOT EXISTS ticket_ad_image_url TEXT DEFAULT '';
 	`); err != nil {
 		return fmt.Errorf("error creating events table: %w", err)
 	}
@@ -370,4 +376,41 @@ func seedAuditorioCharlesChaplin(db *sql.DB) error {
 
 	return tx.Commit()
 }
+
+func seedInitialAdmin(db *sql.DB) error {
+	var count int
+	err := db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count)
+	if err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+
+	fmt.Println("[SEEDS] Creando usuario administrador inicial (admin@roveni.com)...")
+	hash, err := bcrypt.GenerateFromPassword([]byte("Admin1234!"), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+
+	var adminID int64
+	err = db.QueryRow(`
+		INSERT INTO users (email, password_hash, role)
+		VALUES ('admin@roveni.com', $1, 'administrador')
+		RETURNING id
+	`, string(hash)).Scan(&adminID)
+	if err != nil {
+		return err
+	}
+
+	_, _ = db.Exec(`
+		INSERT INTO organizer_profiles (user_id, full_name, phone, email, type_organizer)
+		VALUES ($1, 'Administrador Roveni', '5512345678', 'admin@roveni.com', 'organizador')
+		ON CONFLICT (user_id) DO NOTHING
+	`, adminID)
+
+	fmt.Println("¡Usuario administrador inicial creado exitosamente: admin@roveni.com / Admin1234!")
+	return nil
+}
+
 

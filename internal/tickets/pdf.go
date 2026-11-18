@@ -6,6 +6,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"image"
+	_ "image/jpeg"
+	_ "image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,6 +38,8 @@ type TicketPDFData struct {
 	Currency      string
 	SeatLabel     string
 	IsCourtesy    bool
+	TicketDesignMode string
+	TicketAdImage    string
 }
 
 func GenerateTicketQRPayload(data TicketPDFData) (string, string) {
@@ -122,9 +127,17 @@ func GenerateSingleTicketPDF(data TicketPDFData) (string, error) {
 		pdf.Cell(40, 6, "ROVENI SOCIETY")
 	}
 
-	isCourtesy := data.IsCourtesy || data.Price == 0 || strings.Contains(strings.ToUpper(data.CategoryName), "CORTESÍA") || strings.Contains(strings.ToUpper(data.CategoryName), "CORTESIA")
+	isInvitation := strings.EqualFold(data.TicketDesignMode, "invitacion") || strings.Contains(strings.ToUpper(data.CategoryName), "INVITACIÓN") || strings.Contains(strings.ToUpper(data.CategoryName), "INVITACION")
+	isCourtesy := !isInvitation && (data.IsCourtesy || data.Price == 0 || strings.Contains(strings.ToUpper(data.CategoryName), "CORTESÍA") || strings.Contains(strings.ToUpper(data.CategoryName), "CORTESIA"))
 
-	if isCourtesy {
+	if isInvitation {
+		pdf.SetFillColor(10, 11, 14)
+		pdf.Rect(55, 3, 85, 14, "F")
+		pdf.SetFont("Helvetica", "B", 10)
+		pdf.SetTextColor(208, 192, 173)
+		pdf.SetXY(55, 7)
+		pdf.CellFormat(85, 6, tr("INVITACIÓN OFICIAL"), "", 0, "C", false, 0, "")
+	} else if isCourtesy {
 		pdf.SetFillColor(67, 9, 31)
 		pdf.Rect(60, 3, 78, 14, "F")
 		pdf.SetFont("Helvetica", "B", 10)
@@ -156,99 +169,144 @@ func GenerateSingleTicketPDF(data TicketPDFData) (string, error) {
 	contentWidth := 122.0
 
 	// Event Name
-	pdf.SetFont("Helvetica", "B", 14)
+	pdf.SetFont("Helvetica", "B", 12.5)
 	pdf.SetTextColor(10, 11, 14)
-	pdf.SetXY(leftMargin, 24)
-	pdf.MultiCell(contentWidth, 6.0, tr(data.EventName), "", "L", false)
+	pdf.SetXY(leftMargin, 23.5)
+	pdf.MultiCell(contentWidth, 5.2, tr(data.EventName), "", "L", false)
 
-	currY := pdf.GetY() + 2
+	currY := pdf.GetY() + 1.5
 
 	// Category Badge
 	pdf.SetFillColor(196, 180, 161)
-	pdf.Rect(12, currY, 65, 6, "F")
-	pdf.SetFont("Helvetica", "B", 8)
+	pdf.Rect(12, currY, 65, 5.5, "F")
+	pdf.SetFont("Helvetica", "B", 7.5)
 	pdf.SetTextColor(10, 11, 14)
-	pdf.SetXY(14, currY+0.8)
-	pdf.Cell(60, 4.5, tr(fmt.Sprintf("CATEGORIA: %s", strings.ToUpper(data.CategoryName))))
+	pdf.SetXY(14, currY+0.6)
+	pdf.Cell(60, 4.3, tr(fmt.Sprintf("CATEGORIA: %s", strings.ToUpper(data.CategoryName))))
 
-	currY += 8
+	currY += 7.2
 
 	// --- LUGAR ---
-	pdf.SetFont("Helvetica", "B", 8)
+	pdf.SetFont("Helvetica", "B", 7.5)
 	pdf.SetTextColor(90, 78, 64)
 	pdf.SetXY(12, currY)
-	pdf.Cell(25, 4, "LUGAR:")
+	pdf.Cell(25, 3.8, "LUGAR:")
 
-	pdf.SetFont("Helvetica", "B", 8)
+	pdf.SetFont("Helvetica", "B", 7.5)
 	pdf.SetTextColor(10, 11, 14)
 	pdf.SetXY(37, currY)
 	venueText := fmt.Sprintf("%s (%s, %s)", data.VenueAddress, data.City, data.Country)
-	pdf.MultiCell(97, 4, tr(venueText), "", "L", false)
+	pdf.MultiCell(97, 3.8, tr(venueText), "", "L", false)
 
-	currY = pdf.GetY() + 2
+	currY = pdf.GetY() + 1.2
 
 	// --- FECHA Y HORA ---
-	pdf.SetFont("Helvetica", "B", 8)
+	pdf.SetFont("Helvetica", "B", 7.5)
 	pdf.SetTextColor(90, 78, 64)
 	pdf.SetXY(12, currY)
-	pdf.Cell(25, 4, "FECHA Y HORA:")
+	pdf.Cell(25, 3.8, "FECHA Y HORA:")
 
-	pdf.SetFont("Helvetica", "B", 8)
+	pdf.SetFont("Helvetica", "B", 7.5)
 	pdf.SetTextColor(10, 11, 14)
 	pdf.SetXY(37, currY)
-	pdf.Cell(97, 4, tr(fmt.Sprintf("%s | Show: %s (Puertas: %s)", data.EventDate, data.ShowStartTime, data.DoorsOpenTime)))
+	timeText := fmt.Sprintf("%s | Inicio: %s", data.EventDate, data.ShowStartTime)
+	if strings.TrimSpace(data.DoorsOpenTime) != "" {
+		timeText += fmt.Sprintf(" (Puertas: %s)", data.DoorsOpenTime)
+	}
+	pdf.Cell(97, 3.8, tr(timeText))
 
 	// --- TITULAR ---
-	currY += 5.5
-	pdf.SetFont("Helvetica", "B", 8)
+	currY += 4.5
+	pdf.SetFont("Helvetica", "B", 7.5)
 	pdf.SetTextColor(90, 78, 64)
 	pdf.SetXY(12, currY)
-	pdf.Cell(25, 4, "TITULAR:")
+	pdf.Cell(25, 3.8, "TITULAR:")
 
-	pdf.SetFont("Helvetica", "B", 8)
+	pdf.SetFont("Helvetica", "B", 7.5)
 	pdf.SetTextColor(10, 11, 14)
 	pdf.SetXY(37, currY)
-	pdf.Cell(97, 4, tr(data.CustomerName))
+	pdf.Cell(97, 3.8, tr(data.CustomerName))
 
 	// --- ORDEN Y BOLETO ---
-	currY += 5.5
-	pdf.SetFont("Helvetica", "B", 8)
+	currY += 4.5
+	pdf.SetFont("Helvetica", "B", 7.5)
 	pdf.SetTextColor(90, 78, 64)
 	pdf.SetXY(12, currY)
-	pdf.Cell(25, 4, "ORDEN:")
+	pdf.Cell(25, 3.8, "ORDEN:")
 
-	pdf.SetFont("Helvetica", "B", 8)
+	pdf.SetFont("Helvetica", "B", 7.5)
 	pdf.SetTextColor(10, 11, 14)
 	pdf.SetXY(37, currY)
-	pdf.Cell(45, 4, data.OrderNumber)
+	pdf.Cell(45, 3.8, data.OrderNumber)
 
-	pdf.SetFont("Helvetica", "B", 8)
+	pdf.SetFont("Helvetica", "B", 7.5)
 	pdf.SetTextColor(90, 78, 64)
 	pdf.SetXY(82, currY)
-	pdf.Cell(15, 4, "BOLETO:")
+	pdf.Cell(15, 3.8, "BOLETO:")
 
-	pdf.SetFont("Helvetica", "B", 8)
+	pdf.SetFont("Helvetica", "B", 7.5)
 	pdf.SetTextColor(10, 11, 14)
 	pdf.SetXY(97, currY)
-	pdf.Cell(25, 4, fmt.Sprintf("%d de %d", data.TicketIndex, data.TotalTickets))
+	pdf.Cell(25, 3.8, fmt.Sprintf("%d de %d", data.TicketIndex, data.TotalTickets))
 
-	// --- ASIENTO / UBICACIÓN ---
-	currY += 5.5
-	pdf.SetFont("Helvetica", "B", 8)
-	pdf.SetTextColor(90, 78, 64)
-	pdf.SetXY(12, currY)
-	pdf.Cell(25, 4, "ASIENTO:")
+	// --- ASIENTO / UBICACIÓN (Solo si el boleto tiene asiento asignado) ---
+	if strings.TrimSpace(data.SeatLabel) != "" {
+		currY += 4.5
+		pdf.SetFont("Helvetica", "B", 7.5)
+		pdf.SetTextColor(90, 78, 64)
+		pdf.SetXY(12, currY)
+		pdf.Cell(25, 3.8, "ASIENTO:")
 
-	pdf.SetFont("Helvetica", "B", 8)
-	pdf.SetTextColor(10, 11, 14)
-	pdf.SetXY(37, currY)
-	seatDisplay := data.SeatLabel
-	if seatDisplay == "" {
-		seatDisplay = "Entrada General (Sin Asiento Reservado)"
+		pdf.SetFont("Helvetica", "B", 7.5)
+		pdf.SetTextColor(10, 11, 14)
+		pdf.SetXY(37, currY)
+		pdf.Cell(97, 3.8, tr(data.SeatLabel))
 	}
-	pdf.Cell(97, 4, tr(seatDisplay))
 
-	if isCourtesy {
+	// --- ESPACIO PUBLICITARIO / IMAGEN INSTITUCIONAL (ADMINISTRADOR) ---
+	if data.TicketAdImage != "" {
+		cleanAdPath := strings.TrimPrefix(data.TicketAdImage, "/")
+		fullAdPath := filepath.Join(".", cleanAdPath)
+		if fImg, err := os.Open(fullAdPath); err == nil {
+			imgCfg, _, errDecode := image.DecodeConfig(fImg)
+			fImg.Close()
+
+			maxBoxW := 122.0
+			maxBoxH := 24.0
+			adY := currY + 4.0
+			if adY < 74.0 {
+				adY = 74.0
+			}
+			if adY+maxBoxH > 100.0 {
+				maxBoxH = 100.0 - adY
+			}
+
+			if errDecode == nil && imgCfg.Width > 0 && imgCfg.Height > 0 {
+				aspect := float64(imgCfg.Width) / float64(imgCfg.Height)
+				renderW := maxBoxW
+				renderH := renderW / aspect
+				if renderH > maxBoxH {
+					renderH = maxBoxH
+					renderW = renderH * aspect
+				}
+				// Centrado horizontal en la columna izquierda
+				renderX := 12.0 + (maxBoxW-renderW)/2.0
+				pdf.ImageOptions(fullAdPath, renderX, adY, renderW, renderH, false, gofpdf.ImageOptions{}, 0, "")
+			} else {
+				pdf.ImageOptions(fullAdPath, 12, adY, maxBoxW, maxBoxH, false, gofpdf.ImageOptions{}, 0, "")
+			}
+		}
+	}
+
+	if isInvitation {
+		// Prominent Institutional Banner on Left Column Bottom
+		pdf.SetFillColor(10, 11, 14)
+		pdf.Rect(12, 102, 125, 12, "F")
+		pdf.SetFont("Helvetica", "B", 7.5)
+		pdf.SetTextColor(208, 192, 173)
+		pdf.SetXY(12, 105)
+		pdf.CellFormat(125, 6, tr("INVITACIÓN PERSONAL E INTRANSFERIBLE • CONTROL DE ACCESO OFICIAL"), "", 0, "C", false, 0, "")
+	} else if isCourtesy {
 		// Prominent Banner on Left Column Bottom
 		pdf.SetFillColor(67, 9, 31)
 		pdf.Rect(12, 102, 125, 12, "F")
@@ -283,7 +341,14 @@ func GenerateSingleTicketPDF(data TicketPDFData) (string, error) {
 	pdf.SetXY(145, 86)
 	pdf.CellFormat(55, 5, fmt.Sprintf("SIG: %s", qrSig), "", 0, "C", false, 0, "")
 
-	if isCourtesy {
+	if isInvitation {
+		pdf.SetFillColor(10, 11, 14)
+		pdf.Rect(146, 96, 54, 18, "F")
+		pdf.SetFont("Helvetica", "B", 11)
+		pdf.SetTextColor(208, 192, 173)
+		pdf.SetXY(146, 101)
+		pdf.CellFormat(54, 8, tr("INVITADO"), "", 0, "C", false, 0, "")
+	} else if isCourtesy {
 		pdf.SetFillColor(67, 9, 31) // Dark Red #b41e1e
 		pdf.Rect(146, 96, 54, 18, "F")
 		pdf.SetFont("Helvetica", "B", 13)

@@ -153,7 +153,7 @@ func LoginUserHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 		var pwHash string
 		var createdAt time.Time
 
-		err := db.QueryRow("SELECT id, role, password_hash, created_at FROM users WHERE email = $1", req.Email).Scan(&userID, &role, &pwHash, &createdAt)
+		err := db.QueryRow("SELECT id, role, password_hash, created_at FROM users WHERE LOWER(TRIM(email)) = LOWER(TRIM($1))", req.Email).Scan(&userID, &role, &pwHash, &createdAt)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "correo o contraseña incorrectos"})
