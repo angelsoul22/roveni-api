@@ -278,7 +278,7 @@ func BuildConfirmationEmailHTML(data EmailData) (string, string) {
 		descText := "Este evento es de carácter estrictamente privado. Tus boletos oficiales con código QR se encuentran adjuntos a este correo para tu acceso al recinto. A continuación encontrarás la información oficial para consultar la página del evento:"
 		if isInstitutional {
 			badgeTitle = "CONTROL Y PROTOCOLO INSTITUCIONAL"
-			descText = "Este evento cuenta con control estricto de acreditación y aforo reservado. Su invitación oficial digital se encuentra adjunta a este correo para su validación en puerta. Puede consultar el programa protocolario en el siguiente enlace:"
+			descText = "Este evento cuenta con control estricto de acreditación y aforo reservado."
 		}
 
 		privateEventBlock = fmt.Sprintf(`
