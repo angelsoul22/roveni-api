@@ -219,6 +219,9 @@ func createTables(db *sql.DB) error {
 	ALTER TABLE purchases ADD COLUMN IF NOT EXISTS exchange_rate NUMERIC(12, 6) DEFAULT 1.0;
 	ALTER TABLE purchases ADD COLUMN IF NOT EXISTS is_courtesy BOOLEAN DEFAULT FALSE;
 	ALTER TABLE purchases ADD COLUMN IF NOT EXISTS courtesy_note TEXT DEFAULT '';
+	ALTER TABLE purchases ADD COLUMN IF NOT EXISTS rsvp_status VARCHAR(20) DEFAULT 'pending';
+	ALTER TABLE purchases ADD COLUMN IF NOT EXISTS rsvp_at TIMESTAMPTZ NULL;
+	ALTER TABLE purchases ADD COLUMN IF NOT EXISTS rsvp_notes TEXT DEFAULT '';
 	`); err != nil {
 		return fmt.Errorf("error creating purchases table: %w", err)
 	}

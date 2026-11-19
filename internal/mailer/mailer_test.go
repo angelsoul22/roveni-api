@@ -194,7 +194,7 @@ func TestFormatSenderHeader(t *testing.T) {
 			rawFrom:      "",
 			envName:      "",
 			wantEnvelope: "info@rovenisociety.com",
-			wantName:     "Roveni",
+			wantName:     "Roveni Society",
 		},
 		{
 			name:         "Custom sender name from data",

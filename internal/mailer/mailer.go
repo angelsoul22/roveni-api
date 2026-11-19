@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/mail"
 	"net/smtp"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -128,15 +129,15 @@ func BuildConfirmationEmailHTML(data EmailData) (string, string) {
 		subject = fmt.Sprintf("Acceso Privado Confirmado · %s (Orden #%s)", data.EventName, data.OrderNumber)
 	}
 
-	bannerBadgeHTML := `<div style="display: inline-block; background-color: #0a0b0e; color: #d0c0ad; border: 1px solid #0a0b0e; border-radius: 4px; padding: 6px 18px; margin-bottom: 18px;">
-                                <span style="color: #d0c0ad; font-weight: bold; font-size: 11px; text-transform: uppercase; letter-spacing: 2px;">✦ ACCESO CONFIRMADO · ORDEN OFICIAL</span>
+	bannerBadgeHTML := `<div style="display: inline-block; background-color: #d0c0ad; color: #0a0b0e; border: 1px solid #d0c0ad; border-radius: 4px; padding: 6px 18px; margin-bottom: 18px;">
+                                <span style="color: #0a0b0e; font-weight: bold; font-size: 11px; text-transform: uppercase; letter-spacing: 2px;">✦ ACCESO CONFIRMADO · ORDEN OFICIAL</span>
                             </div>`
 	bannerTitle := fmt.Sprintf("Bienvenido(a), %s", data.CustomerName)
 	bannerSubtitle := "Tu compra ha sido procesada y confirmada con éxito. Hemos generado tus boletos digitales con firma criptográfica y código QR de alta seguridad. Tus archivos PDF oficiales se encuentran adjuntos a este correo para tu acceso al recinto."
 
 	if isInstitutional {
-		bannerBadgeHTML = `<div style="display: inline-block; background-color: #0a0b0e; color: #d0c0ad; border: 1px solid #0a0b0e; border-radius: 4px; padding: 6px 18px; margin-bottom: 18px;">
-                                <span style="color: #d0c0ad; font-weight: bold; font-size: 11px; text-transform: uppercase; letter-spacing: 2px;">INVITACIÓN OFICIAL</span>
+		bannerBadgeHTML = `<div style="display: inline-block; background-color: #d0c0ad; color: #0a0b0e; border: 1px solid #d0c0ad; border-radius: 4px; padding: 6px 18px; margin-bottom: 18px;">
+                                <span style="color: #0a0b0e; font-weight: bold; font-size: 11px; text-transform: uppercase; letter-spacing: 2px;">INVITACIÓN OFICIAL</span>
                             </div>`
 		bannerTitle = fmt.Sprintf("Distinguido(a) %s,", data.CustomerName)
 		bannerSubtitle = "Es un honor confirmarle que ha sido formalmente acreditado(a) para asistir a este acto solemne. Su invitación oficial digital con código QR de acceso personal e intransferible se encuentra adjunta en formato PDF al presente correo para su recepción y control de acceso."
@@ -147,8 +148,8 @@ func BuildConfirmationEmailHTML(data EmailData) (string, string) {
 		bannerTitle = fmt.Sprintf("¡Tu acceso especial está listo, %s!", data.CustomerName)
 		bannerSubtitle = "Se ha emitido tu pase de cortesía oficial con todas las facilidades de acceso. Encontrarás tus boletos digitales adjuntos en formato PDF con su correspondiente código QR personal listos para su validación en el acceso."
 	} else if data.IsPrivate {
-		bannerBadgeHTML = `<div style="display: inline-block; background-color: #0a0b0e; color: #d0c0ad; border: 1px solid #0a0b0e; border-radius: 4px; padding: 6px 18px; margin-bottom: 18px;">
-                                <span style="color: #d0c0ad; font-weight: bold; font-size: 11px; text-transform: uppercase; letter-spacing: 2px;">🔒 EVENTO PRIVADO · ACCESO EXCLUSIVO</span>
+		bannerBadgeHTML = `<div style="display: inline-block; background-color: #d0c0ad; color: #0a0b0e; border: 1px solid #d0c0ad; border-radius: 4px; padding: 6px 18px; margin-bottom: 18px;">
+                                <span style="color: #0a0b0e; font-weight: bold; font-size: 11px; text-transform: uppercase; letter-spacing: 2px;">🔒 EVENTO PRIVADO · ACCESO EXCLUSIVO</span>
                             </div>`
 		bannerTitle = fmt.Sprintf("Acceso Exclusivo Confirmado, %s", data.CustomerName)
 		bannerSubtitle = "Tus boletos oficiales para este evento privado exclusivo han sido emitidos con éxito. Encontrarás tus pases adjuntos en formato PDF con código QR individual para tu ingreso al recinto."
@@ -237,6 +238,13 @@ func BuildConfirmationEmailHTML(data EmailData) (string, string) {
 		if eventLink == "" && data.EventID > 0 {
 			eventLink = BuildCleanEventURL(data.EventID, data.EventName)
 		}
+		if eventLink != "" && data.OrderNumber != "" && !strings.Contains(eventLink, "order=") {
+			sep := "?"
+			if strings.Contains(eventLink, "?") {
+				sep = "&"
+			}
+			eventLink = fmt.Sprintf("%s%sorder=%s", eventLink, sep, url.QueryEscape(data.OrderNumber))
+		}
 
 		var codeRow string
 		if strings.TrimSpace(data.AccessCode) != "" {
@@ -244,8 +252,8 @@ func BuildConfirmationEmailHTML(data EmailData) (string, string) {
                 <tr>
                     <td style="padding: 12px 0 4px 0;">
                         <span style="color: #7a7065; font-size: 10.5px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 700; display: block; margin-bottom: 6px;">Clave de Acceso al Evento:</span>
-                        <div style="display: inline-block; background-color: #0a0b0e; border: 1px solid #0a0b0e; border-radius: 4px; padding: 8px 18px;">
-                            <span style="font-family: 'Courier New', Courier, monospace; font-size: 16px; font-weight: bold; color: #d0c0ad; letter-spacing: 3px;">%s</span>
+                        <div style="display: inline-block; background-color: #d0c0ad; border: 1px solid #c4b4a1; border-radius: 4px; padding: 8px 18px;">
+                            <span style="font-family: 'Courier New', Courier, monospace; font-size: 16px; font-weight: bold; color: #0a0b0e; letter-spacing: 3px;">%s</span>
                         </div>
                     </td>
                 </tr>
@@ -281,7 +289,7 @@ func BuildConfirmationEmailHTML(data EmailData) (string, string) {
                                 <tr>
                                     <td>
                                         <div style="margin-bottom: 12px;">
-                                            <span style="display: inline-block; background-color: #0a0b0e; color: #d0c0ad; border: 1px solid #0a0b0e; padding: 4px 12px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; border-radius: 4px;">%s</span>
+                                            <span style="display: inline-block; background-color: #d0c0ad; color: #0a0b0e; border: 1px solid #d0c0ad; padding: 4px 12px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; border-radius: 4px;">%s</span>
                                         </div>
                                         <p style="margin: 0 0 12px 0; color: #3d3731; font-size: 13px; line-height: 1.6; font-weight: 400;">
                                             %s
@@ -379,24 +387,6 @@ func BuildConfirmationEmailHTML(data EmailData) (string, string) {
 
                     %s
 
-                    <!-- PDF Attachments Notice -->
-                    <tr>
-                        <td style="padding: 0 30px 20px 30px;">
-                            <table width="100%%" border="0" cellspacing="0" cellpadding="0" style="background-color: #FAF8F5; border: 1px dashed rgba(10, 11, 14, 0.22); border-radius: 8px; padding: 16px;">
-                                <tr>
-                                    <td align="center">
-                                        <div style="color: #0a0b0e; font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 4px;">
-                                            BOLETOS DIGITALES ADJUNTOS EN FORMATO PDF
-                                        </div>
-                                        <div style="color: #5a544b; font-size: 12px; line-height: 1.5;">
-                                            Tus pases de acceso con código QR de seguridad se encuentran adjuntos a este mensaje. Puedes descargarlos o presentarlos directamente desde tu dispositivo móvil en el acceso.
-                                        </div>
-                                    </td>
-                                </tr>
-                            </table>
-                        </td>
-                    </tr>
-
                     <!-- Add to Calendar Block -->
                     <tr>
                         <td style="padding: 0 30px 25px 30px;">
@@ -408,13 +398,13 @@ func BuildConfirmationEmailHTML(data EmailData) (string, string) {
                                         <table border="0" cellspacing="0" cellpadding="0">
                                             <tr>
                                                 <td style="padding: 0 4px;">
-                                                    <a href="%s" target="_blank" style="display: inline-block; background-color: #0a0b0e; border: 1px solid #0a0b0e; color: #d0c0ad; text-decoration: none; padding: 7px 14px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px;">Google Calendar</a>
+                                                    <a href="%s" target="_blank" style="display: inline-block; background-color: #d0c0ad; border: 1px solid #c4b4a1; color: #0a0b0e; text-decoration: none; padding: 7px 14px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px;">Google Calendar</a>
                                                 </td>
                                                 <td style="padding: 0 4px;">
-                                                    <a href="%s" target="_blank" style="display: inline-block; background-color: #0a0b0e; border: 1px solid #0a0b0e; color: #d0c0ad; text-decoration: none; padding: 7px 14px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px;">Outlook</a>
+                                                    <a href="%s" target="_blank" style="display: inline-block; background-color: #d0c0ad; border: 1px solid #c4b4a1; color: #0a0b0e; text-decoration: none; padding: 7px 14px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px;">Outlook</a>
                                                 </td>
                                                 <td style="padding: 0 4px;">
-                                                    <a href="%s" target="_blank" style="display: inline-block; background-color: #0a0b0e; border: 1px solid #0a0b0e; color: #d0c0ad; text-decoration: none; padding: 7px 14px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px;">Apple Calendar</a>
+                                                    <a href="%s" target="_blank" style="display: inline-block; background-color: #d0c0ad; border: 1px solid #c4b4a1; color: #0a0b0e; text-decoration: none; padding: 7px 14px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px;">Apple Calendar</a>
                                                 </td>
                                             </tr>
                                         </table>

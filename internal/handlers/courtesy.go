@@ -35,15 +35,17 @@ type IssueCourtesyRequest struct {
 }
 
 type CourtesyPassSummary struct {
-	ID            int64     `json:"id"`
-	OrderNumber   string    `json:"order_number"`
-	CustomerName  string    `json:"customer_name"`
-	CustomerEmail string    `json:"customer_email"`
-	CustomerPhone string    `json:"customer_phone"`
-	CourtesyNote  string    `json:"courtesy_note"`
-	TotalTickets  int       `json:"total_tickets"`
-	Details       string    `json:"details"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID            int64      `json:"id"`
+	OrderNumber   string     `json:"order_number"`
+	CustomerName  string     `json:"customer_name"`
+	CustomerEmail string     `json:"customer_email"`
+	CustomerPhone string     `json:"customer_phone"`
+	CourtesyNote  string     `json:"courtesy_note"`
+	TotalTickets  int        `json:"total_tickets"`
+	Details       string     `json:"details"`
+	CreatedAt     time.Time  `json:"created_at"`
+	RSVPStatus    string     `json:"rsvp_status"`
+	RSVPAt        *time.Time `json:"rsvp_at,omitempty"`
 }
 
 type CourtesyListResponse struct {
@@ -52,6 +54,7 @@ type CourtesyListResponse struct {
 	CourtesyQuota  int                   `json:"courtesy_quota"`
 	IssuedCount    int                   `json:"issued_count"`
 	RemainingCount int                   `json:"remaining_count"`
+	ConfirmedCount int                   `json:"confirmed_count"`
 	Courtesies     []CourtesyPassSummary `json:"courtesies"`
 }
 
@@ -459,7 +462,9 @@ func GetCourtesyListHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 				p.id, p.order_number, p.customer_name, p.customer_email, COALESCE(p.customer_phone, ''), 
 				COALESCE(p.courtesy_note, ''), p.created_at,
 				COALESCE(SUM(pi.quantity), 0) as total_tickets,
-				COALESCE(STRING_AGG(CONCAT(pi.ticket_name, CASE WHEN pi.seat_label != '' THEN CONCAT(' (', pi.seat_label, ')') ELSE '' END), ', '), '') as details
+				COALESCE(STRING_AGG(CONCAT(pi.ticket_name, CASE WHEN pi.seat_label != '' THEN CONCAT(' (', pi.seat_label, ')') ELSE '' END), ', '), '') as details,
+				COALESCE(p.rsvp_status, 'pending') as rsvp_status,
+				p.rsvp_at
 			FROM purchases p
 			JOIN purchase_items pi ON pi.purchase_id = p.id
 			WHERE p.event_id = $1 AND p.is_courtesy = true AND p.status = 'completed'
@@ -475,10 +480,18 @@ func GetCourtesyListHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 
 		var courtesies []CourtesyPassSummary
 		totalIssued := 0
+		totalConfirmed := 0
 
 		for rows.Next() {
 			var c CourtesyPassSummary
-			if errScan := rows.Scan(&c.ID, &c.OrderNumber, &c.CustomerName, &c.CustomerEmail, &c.CustomerPhone, &c.CourtesyNote, &c.CreatedAt, &c.TotalTickets, &c.Details); errScan == nil {
+			var rsvpAt sql.NullTime
+			if errScan := rows.Scan(&c.ID, &c.OrderNumber, &c.CustomerName, &c.CustomerEmail, &c.CustomerPhone, &c.CourtesyNote, &c.CreatedAt, &c.TotalTickets, &c.Details, &c.RSVPStatus, &rsvpAt); errScan == nil {
+				if rsvpAt.Valid {
+					c.RSVPAt = &rsvpAt.Time
+				}
+				if c.RSVPStatus == "confirmed" {
+					totalConfirmed += c.TotalTickets
+				}
 				courtesies = append(courtesies, c)
 				totalIssued += c.TotalTickets
 			}
@@ -495,6 +508,7 @@ func GetCourtesyListHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 			CourtesyQuota:  courtesyQuota,
 			IssuedCount:    totalIssued,
 			RemainingCount: remaining,
+			ConfirmedCount: totalConfirmed,
 			Courtesies:     courtesies,
 		})
 	}

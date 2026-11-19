@@ -616,7 +616,9 @@ func ExportAttendeesCSVHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 
 		rows, err := db.Query(fmt.Sprintf(`
 			SELECT id, order_number, customer_name, customer_email, COALESCE(customer_phone, ''), 
-			       %s as amount_usd, status, created_at 
+			       %s as amount_usd, status, created_at,
+			       COALESCE(rsvp_status, 'pending') as rsvp_status,
+			       rsvp_at
 			FROM purchases 
 			WHERE event_id = $1 AND status = 'completed'
 			ORDER BY created_at DESC
@@ -636,22 +638,25 @@ func ExportAttendeesCSVHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 		// Header
 		_ = writer.Write([]string{
 			"Número de Orden",
-			"Nombre del Comprador",
+			"Nombre del Asistente",
 			"Correo Electrónico",
 			"Teléfono",
 			"Detalle de Boletos",
 			headerAmount,
-			"Fecha de Compra",
+			"Fecha de Emisión",
+			"Confirmación RSVP",
+			"Fecha Confirmación RSVP",
 			"Estado Escáner / Ingreso",
 		})
 
 		for rows.Next() {
 			var purID int64
-			var orderNum, custName, custEmail, custPhone, status string
+			var orderNum, custName, custEmail, custPhone, status, rsvpStatus string
+			var rsvpAt sql.NullTime
 			var amountUSD float64
 			var createdAt time.Time
 
-			if err := rows.Scan(&purID, &orderNum, &custName, &custEmail, &custPhone, &amountUSD, &status, &createdAt); err == nil {
+			if err := rows.Scan(&purID, &orderNum, &custName, &custEmail, &custPhone, &amountUSD, &status, &createdAt, &rsvpStatus, &rsvpAt); err == nil {
 				// Query ticket items
 				var itemsStr string
 				itemRows, itemErr := db.Query(`
@@ -681,6 +686,19 @@ func ExportAttendeesCSVHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 					scannedLabel = fmt.Sprintf("Ingresado (%d escaneos)", scanCount)
 				}
 
+				rsvpLabel := "Pendiente de Confirmar"
+				switch strings.ToLower(rsvpStatus) {
+				case "confirmed":
+					rsvpLabel = "Confirmada"
+				case "declined":
+					rsvpLabel = "Declinada / No Asistirá"
+				}
+
+				rsvpDateStr := "-"
+				if rsvpAt.Valid {
+					rsvpDateStr = rsvpAt.Time.Format("2006-01-02 15:04:05")
+				}
+
 				_ = writer.Write([]string{
 					orderNum,
 					custName,
@@ -689,6 +707,8 @@ func ExportAttendeesCSVHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 					itemsStr,
 					fmt.Sprintf("$%.2f", amountUSD),
 					createdAt.Format("2006-01-02 15:04:05"),
+					rsvpLabel,
+					rsvpDateStr,
 					scannedLabel,
 				})
 			}

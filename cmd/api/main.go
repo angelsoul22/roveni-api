@@ -117,6 +117,8 @@ func main() {
 	mux.HandleFunc("/public/events/detail", handlers.PublicEventDetailHandler(db))
 	mux.HandleFunc("/public/events/calendar.ics", handlers.GetEventICSHandler(db))
 	mux.HandleFunc("/public/events/seats", handlers.GetEventSeatsHandler(db))
+	mux.HandleFunc("/public/events/rsvp", handlers.RSVPHandler(db))
+	mux.HandleFunc("/public/events/rsvp-status", handlers.RSVPStatusHandler(db))
 
 	mux.HandleFunc("/public/checkout/hold-seats", handlers.HoldSeatsHandler(db))
 	mux.HandleFunc("/public/checkout/release-seats", handlers.ReleaseSeatsHandler(db))
