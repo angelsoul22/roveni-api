@@ -262,20 +262,30 @@ func BuildConfirmationEmailHTML(data EmailData) (string, string) {
 
 		var linkRow string
 		if eventLink != "" {
+			rsvpReminderNote := "<strong>Recordatorio de Asistencia:</strong> Le solicitamos ingresar al enlace oficial para consultar los detalles del acto protocolario y <strong>confirmar su asistencia</strong> con anticipación para garantizar su recepción."
+			if !isInstitutional {
+				rsvpReminderNote = "<strong>Recordatorio de Asistencia:</strong> Ingrese al siguiente enlace para consultar los detalles del evento y <strong>confirmar su asistencia</strong> con anticipación:"
+			}
+
 			linkRow = fmt.Sprintf(`
                 <tr>
-                    <td style="padding: 12px 0 0 0;">
-                        <span style="color: #7a7065; font-size: 10.5px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 700; display: block; margin-bottom: 4px;">Enlace Oficial del Evento:</span>
-                        <p style="margin: 0; word-break: break-all; font-size: 13px;">
+                    <td style="padding: 14px 0 0 0;">
+                        <span style="color: #7a7065; font-size: 10.5px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 700; display: block; margin-bottom: 6px;">Enlace Oficial del Evento & Confirmación de Asistencia:</span>
+                        <div style="background-color: #ede6dc; border-left: 3px solid #0a0b0e; padding: 12px 14px; margin-bottom: 12px; border-radius: 0 4px 4px 0;">
+                            <p style="margin: 0; color: #3d3731; font-size: 12.5px; line-height: 1.5;">
+                                %s
+                            </p>
+                        </div>
+                        <p style="margin: 0; word-break: break-all; font-size: 13px; line-height: 1.5;">
                             <a href="%s" target="_blank" style="color: #0a0b0e; text-decoration: underline; font-weight: 600;">%s</a>
                         </p>
                     </td>
                 </tr>
-            `, eventLink, eventLink)
+            `, rsvpReminderNote, eventLink, eventLink)
 		}
 
 		badgeTitle := "ACCESO EXCLUSIVO A EVENTO PRIVADO"
-		descText := "Este evento es de carácter estrictamente privado. Tus boletos oficiales con código QR se encuentran adjuntos a este correo para tu acceso al recinto. A continuación encontrarás la información oficial para consultar la página del evento:"
+		descText := "Este evento es de carácter estrictamente privado. Tus boletos oficiales con código QR se encuentran adjuntos a este correo para tu acceso al recinto. A continuación encontrarás la información oficial para consultar la página del evento y confirmar tu asistencia:"
 		if isInstitutional {
 			badgeTitle = "CONTROL Y PROTOCOLO INSTITUCIONAL"
 			descText = "Este evento cuenta con control estricto de acreditación y aforo reservado."
@@ -478,7 +488,7 @@ func FormatSenderHeader(senderName, rawFrom string) (envelopeEmail string, heade
 		name = strings.TrimSpace(os.Getenv("SMTP_FROM_NAME"))
 	}
 	if name == "" {
-		name = "Roveni Society"
+		name = "Informe de Actividades - Fer Romero"
 	}
 
 	headerFrom = (&mail.Address{

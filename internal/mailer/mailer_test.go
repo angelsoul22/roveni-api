@@ -76,6 +76,8 @@ func TestBuildConfirmationEmailHTML(t *testing.T) {
 				"Distinguido(a) Dr. Ricardo Villanueva",
 				"acto solemne",
 				"PROTOCOLO-2026",
+				"Enlace Oficial del Evento & Confirmación de Asistencia:",
+				"Recordatorio de Asistencia:",
 			},
 			mustNotConta: []string{
 				"100%%",
@@ -83,6 +85,7 @@ func TestBuildConfirmationEmailHTML(t *testing.T) {
 				"Desglose de Accesos",
 				"Modalidad de Ingreso:",
 				"Costo de Acreditación:",
+				"Confirmar Asistencia al Acto",
 			},
 		},
 		{
@@ -144,12 +147,14 @@ func TestBuildConfirmationEmailHTML(t *testing.T) {
 				"Acceso Exclusivo Confirmado, Carlos Slim Domit",
 				"ACCESO EXCLUSIVO A EVENTO PRIVADO",
 				"MILLESIME-2026",
-				"Enlace Oficial del Evento:",
+				"Enlace Oficial del Evento & Confirmación de Asistencia:",
+				"Recordatorio de Asistencia:",
 				"width=\"100%\"",
 			},
 			mustNotConta: []string{
 				"100%%",
 				"?pwd=", // no pre-loaded password in URL button
+				"Confirmar Asistencia al Evento",
 			},
 		},
 	}
@@ -194,7 +199,7 @@ func TestFormatSenderHeader(t *testing.T) {
 			rawFrom:      "",
 			envName:      "",
 			wantEnvelope: "info@rovenisociety.com",
-			wantName:     "Roveni Society",
+			wantName:     "Informe de Actividades - Fer Romero",
 		},
 		{
 			name:         "Custom sender name from data",
