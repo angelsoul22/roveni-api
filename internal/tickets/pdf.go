@@ -37,6 +37,7 @@ type TicketPDFData struct {
 	Price            float64
 	Currency         string
 	SeatLabel        string
+	EventZone        string
 	IsCourtesy       bool
 	IsPrivate        bool
 	TicketDesignMode string
@@ -68,6 +69,7 @@ func GenerateTicketQRPayload(data TicketPDFData) (string, string) {
 		"serial":    data.TicketSerial,
 		"event":     data.EventName,
 		"category":  data.CategoryName,
+		"zone":      strings.TrimSpace(data.EventZone),
 		"holder":    data.CustomerName,
 		"issued_at": time.Now().Unix(),
 		"sig":       signature[:16],
@@ -255,6 +257,20 @@ func GenerateSingleTicketPDF(data TicketPDFData) (string, error) {
 		pdf.SetTextColor(10, 11, 14)
 		pdf.SetXY(97, currY)
 		pdf.Cell(25, 3.8, fmt.Sprintf("%d de %d", data.TicketIndex, data.TotalTickets))
+	}
+
+	// --- ZONA PROTOCOLARIA / UBICACIÓN (Si el boleto tiene zona asignada) ---
+	if strings.TrimSpace(data.EventZone) != "" {
+		currY += 4.5
+		pdf.SetFont("Helvetica", "B", 7.5)
+		pdf.SetTextColor(90, 78, 64)
+		pdf.SetXY(12, currY)
+		pdf.Cell(25, 3.8, "ZONA:")
+
+		pdf.SetFont("Helvetica", "B", 7.5)
+		pdf.SetTextColor(10, 11, 14)
+		pdf.SetXY(37, currY)
+		pdf.Cell(97, 3.8, tr(strings.ToUpper(strings.TrimSpace(data.EventZone))))
 	}
 
 	// --- ASIENTO / UBICACIÓN (Solo si el boleto tiene asiento asignado) ---

@@ -26,6 +26,7 @@ type QRPayloadParsed struct {
 	Serial   string `json:"serial"`
 	Event    string `json:"event"`
 	Category string `json:"category"`
+	Zone     string `json:"zone"`
 	Holder   string `json:"holder"`
 	Sig      string `json:"sig"`
 }
@@ -165,14 +166,15 @@ func ValidateTicketScanHandler(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// Get category name and seat label from purchase items
-		var categoryName, seatLabel string
+		// Get category name, seat label and event zone from purchase items & purchases
+		var categoryName, seatLabel, eventZone string
 		_ = db.QueryRow(`
-			SELECT ticket_name, COALESCE(seat_label, '') 
-			FROM purchase_items 
-			WHERE purchase_id = (SELECT id FROM purchases WHERE order_number = $1) 
+			SELECT pi.ticket_name, COALESCE(pi.seat_label, ''), COALESCE(p.event_zone, '') 
+			FROM purchase_items pi
+			JOIN purchases p ON p.id = pi.purchase_id
+			WHERE p.order_number = $1 
 			LIMIT 1
-		`, dbOrderNumber).Scan(&categoryName, &seatLabel)
+		`, dbOrderNumber).Scan(&categoryName, &seatLabel, &eventZone)
 
 		if categoryName == "" {
 			categoryName = "Acceso General"
@@ -206,6 +208,7 @@ func ValidateTicketScanHandler(db *sql.DB) http.HandlerFunc {
 			"event_name":     eventName,
 			"category_name":  categoryName,
 			"seat_label":     seatLabel,
+			"event_zone":     eventZone,
 			"venue":          venueAddress,
 			"scanned_at":     nowLocal.Format("15:04:05 - 02/01/2006"),
 			"scanned_at_iso": now.Format(time.RFC3339),

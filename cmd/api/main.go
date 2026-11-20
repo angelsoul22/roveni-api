@@ -136,6 +136,7 @@ func main() {
 	mux.HandleFunc("/organizers/events/export-attendees-csv", handlers.ExportAttendeesCSVHandler(db, rdb))
 	mux.HandleFunc("/organizers/events/issue-courtesy", handlers.IssueCourtesyTicketHandler(db, rdb))
 	mux.HandleFunc("/organizers/events/courtesy-list", handlers.GetCourtesyListHandler(db, rdb))
+	mux.HandleFunc("/organizers/events/courtesy-rsvp", handlers.UpdateCourtesyRSVPHandler(db, rdb))
 	mux.HandleFunc("/dashboard/overview", handlers.GetDashboardOverviewHandler(db, rdb))
 
 	mux.Handle("/uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir("./uploads"))))

@@ -332,6 +332,14 @@ func ListEventsHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 				FROM events 
 				ORDER BY created_at DESC
 			`)
+		} else if role == "staff_invitaciones" {
+			// Staff sees only events explicitly assigned to them
+			rows, err = db.Query(`
+				SELECT id, organizer_id, name, description, category, COALESCE(image_url, ''), country, city, venue_address, event_date, doors_open_time, show_start_time, sale_start_date, sale_start_time, max_tickets_per_user, COALESCE(status, 'Publicado'), COALESCE(currency, 'USD'), COALESCE(spotify_url, ''), COALESCE(apple_music_url, ''), COALESCE(youtube_url, ''), COALESCE(instagram_url, ''), COALESCE(tiktok_url, ''), COALESCE(service_fee_percentage, 20.00), COALESCE(courtesy_quota, 0), COALESCE(is_private, false), COALESCE(private_type, 'interactivo'), COALESCE(access_code, ''), COALESCE(ticket_ad_image_url, ''), created_at 
+				FROM events 
+				WHERE id IN (SELECT event_id FROM user_assigned_events WHERE user_id = $1)
+				ORDER BY created_at DESC
+			`, userID)
 		} else {
 			// Organizer sees only their own events (including paused/cancelled)
 			rows, err = db.Query(`
@@ -423,8 +431,17 @@ func GetEventDetailHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 			return
 		}
 
-		// Restriction: each organizer sees their own, admin sees all
-		if role != "administrador" && ev.OrganizerID != userID {
+		// Restriction: each organizer sees their own, admin sees all, staff sees assigned
+		hasAccess := role == "administrador" || ev.OrganizerID == userID
+		if !hasAccess && role == "staff_invitaciones" {
+			var assignedCount int
+			_ = db.QueryRow("SELECT COUNT(*) FROM user_assigned_events WHERE user_id = $1 AND event_id = $2", userID, ev.ID).Scan(&assignedCount)
+			if assignedCount > 0 {
+				hasAccess = true
+			}
+		}
+
+		if !hasAccess {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden: you cannot access this event"})
 			return
 		}

@@ -69,15 +69,30 @@ func createTables(db *sql.DB) error {
 		return fmt.Errorf("error creating users table: %w", err)
 	}
 
-	// Add/update role constraint to support administrador, organizador, and cliente
+	// Add/update role constraint to support administrador, organizador, cliente, and staff_invitaciones
 	if _, err := db.Exec(`
 	DO $$
 	BEGIN
 		ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
-		ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('administrador','organizador','cliente'));
+		ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('administrador','organizador','cliente','staff_invitaciones'));
 	END$$
 	`); err != nil {
 		return fmt.Errorf("error adding role constraint: %w", err)
+	}
+
+	// Create user_assigned_events table for staff permissions per event
+	if _, err := db.Exec(`
+	CREATE TABLE IF NOT EXISTS user_assigned_events (
+		id SERIAL PRIMARY KEY,
+		user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+		created_at TIMESTAMPTZ DEFAULT now(),
+		UNIQUE (user_id, event_id)
+	);
+	CREATE INDEX IF NOT EXISTS idx_user_assigned_events_user ON user_assigned_events(user_id);
+	CREATE INDEX IF NOT EXISTS idx_user_assigned_events_event ON user_assigned_events(event_id);
+	`); err != nil {
+		return fmt.Errorf("error creating user_assigned_events table: %w", err)
 	}
 
 	// Create user_sessions table for 100% session persistence across server restarts
@@ -116,7 +131,7 @@ func createTables(db *sql.DB) error {
 		email TEXT,
 		category TEXT,
 		city TEXT,
-		type_organizer TEXT DEFAULT 'organizador' CHECK (type_organizer IN ('organizador', 'promotor')),
+		type_organizer TEXT DEFAULT 'organizador' CHECK (type_organizer IN ('organizador', 'promotor', 'staff_invitaciones')),
 		experience_area TEXT,
 		document_id TEXT UNIQUE,
 		created_at TIMESTAMPTZ DEFAULT now(),
@@ -125,6 +140,12 @@ func createTables(db *sql.DB) error {
 	`); err != nil {
 		return fmt.Errorf("error creating organizer_profiles table: %w", err)
 	}
+
+	// Update type_organizer constraint to include 'staff_invitaciones'
+	_, _ = db.Exec(`
+		ALTER TABLE organizer_profiles DROP CONSTRAINT IF EXISTS organizer_profiles_type_organizer_check;
+		ALTER TABLE organizer_profiles ADD CONSTRAINT organizer_profiles_type_organizer_check CHECK (type_organizer IN ('organizador', 'promotor', 'staff_invitaciones'));
+	`)
 
 	// Create events table
 	if _, err := db.Exec(`
@@ -222,6 +243,7 @@ func createTables(db *sql.DB) error {
 	ALTER TABLE purchases ADD COLUMN IF NOT EXISTS rsvp_status VARCHAR(20) DEFAULT 'pending';
 	ALTER TABLE purchases ADD COLUMN IF NOT EXISTS rsvp_at TIMESTAMPTZ NULL;
 	ALTER TABLE purchases ADD COLUMN IF NOT EXISTS rsvp_notes TEXT DEFAULT '';
+	ALTER TABLE purchases ADD COLUMN IF NOT EXISTS event_zone TEXT DEFAULT '';
 	`); err != nil {
 		return fmt.Errorf("error creating purchases table: %w", err)
 	}
@@ -240,6 +262,7 @@ func createTables(db *sql.DB) error {
 	);
 	ALTER TABLE purchase_items ADD COLUMN IF NOT EXISTS price_usd NUMERIC(12, 2) DEFAULT 0.00;
 	ALTER TABLE purchase_items ADD COLUMN IF NOT EXISTS price_native NUMERIC(12, 2) DEFAULT 0.00;
+	ALTER TABLE purchase_items ADD COLUMN IF NOT EXISTS event_zone TEXT DEFAULT '';
 	`); err != nil {
 		return fmt.Errorf("error creating purchase_items table: %w", err)
 	}

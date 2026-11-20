@@ -198,33 +198,37 @@ func GetAuthenticatedUser(r *http.Request, db *sql.DB, rdb *redis.Client) (*Auth
 }
 
 type OrganizerProfile struct {
-	ID             int64     `json:"id"`
-	FullName       string    `json:"full_name"`
-	ContactName    string    `json:"contact_name,omitempty"`
-	Phone          string    `json:"phone,omitempty"`
-	Email          string    `json:"email"`
-	Category       string    `json:"category,omitempty"`
-	City           string    `json:"city,omitempty"`
-	Role           string    `json:"role"`
-	TypeOrganizer  string    `json:"type_organizer,omitempty"`
-	ExperienceArea string    `json:"experience_area,omitempty"`
-	DocumentID     string    `json:"document_id,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID                 int64     `json:"id"`
+	FullName           string    `json:"full_name"`
+	ContactName        string    `json:"contact_name,omitempty"`
+	Phone              string    `json:"phone,omitempty"`
+	Email              string    `json:"email"`
+	Category           string    `json:"category,omitempty"`
+	City               string    `json:"city,omitempty"`
+	Role               string    `json:"role"`
+	TypeOrganizer      string    `json:"type_organizer,omitempty"`
+	ExperienceArea     string    `json:"experience_area,omitempty"`
+	DocumentID         string    `json:"document_id,omitempty"`
+	AssignedEvents     []int64   `json:"assigned_events,omitempty"`
+	AssignedEventNames []string  `json:"assigned_event_names,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 type RegistrationInput struct {
-	FullName       string `json:"full_name"`
-	ContactName    string `json:"contact_name"`
-	CompanyName    string `json:"company_name"`
-	Phone          string `json:"phone"`
-	Email          string `json:"email"`
-	Category       string `json:"category"`
-	City           string `json:"city"`
-	Ciudad         string `json:"ciudad"`
-	Password       string `json:"password"`
-	ExperienceArea string `json:"experience_area"`
-	DocumentID     string `json:"document_id"`
-	Type           string `json:"type"`
+	FullName       string  `json:"full_name"`
+	ContactName    string  `json:"contact_name"`
+	CompanyName    string  `json:"company_name"`
+	Phone          string  `json:"phone"`
+	Email          string  `json:"email"`
+	Category       string  `json:"category"`
+	City           string  `json:"city"`
+	Ciudad         string  `json:"ciudad"`
+	Password       string  `json:"password"`
+	ExperienceArea string  `json:"experience_area"`
+	DocumentID     string  `json:"document_id"`
+	Type           string  `json:"type"`
+	Role           string  `json:"role"`
+	AssignedEvents []int64 `json:"assigned_events"`
 }
 
 func parseRegistrationInput(r *http.Request) (RegistrationInput, error) {
@@ -245,6 +249,16 @@ func parseRegistrationInput(r *http.Request) (RegistrationInput, error) {
 		input.ExperienceArea = r.FormValue("experience_area")
 		input.DocumentID = r.FormValue("document_id")
 		input.Type = r.FormValue("type")
+		input.Role = r.FormValue("role")
+
+		rawEvents := r.FormValue("assigned_events")
+		if rawEvents != "" {
+			for _, s := range strings.Split(rawEvents, ",") {
+				if id, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil && id > 0 {
+					input.AssignedEvents = append(input.AssignedEvents, id)
+				}
+			}
+		}
 
 		file, header, fileErr := r.FormFile("document_file")
 		if fileErr == nil && file != nil {
@@ -496,6 +510,26 @@ func SessionOrganizerHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 		}
 
 		org.ContactName = org.FullName
+
+		// Load assigned events if any
+		aeRows, errAE := db.Query(`
+			SELECT uae.event_id, e.name
+			FROM user_assigned_events uae
+			JOIN events e ON e.id = uae.event_id
+			WHERE uae.user_id = $1
+		`, val)
+		if errAE == nil {
+			for aeRows.Next() {
+				var evID int64
+				var evName string
+				if err := aeRows.Scan(&evID, &evName); err == nil {
+					org.AssignedEvents = append(org.AssignedEvents, evID)
+					org.AssignedEventNames = append(org.AssignedEventNames, evName)
+				}
+			}
+			aeRows.Close()
+		}
+
 		writeJSON(w, http.StatusOK, org)
 	}
 }
@@ -534,7 +568,11 @@ func RegisterPromoterHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 		}
 
 		typeOrg := req.Type
-		if typeOrg == "" {
+		targetRole := "organizador"
+		if req.Role == "staff_invitaciones" || typeOrg == "staff_invitaciones" {
+			targetRole = "staff_invitaciones"
+			typeOrg = "staff_invitaciones"
+		} else if typeOrg == "" {
 			typeOrg = "promotor"
 		}
 
@@ -559,7 +597,7 @@ func RegisterPromoterHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 		var newUserID int64
 		err = tx.QueryRow(
 			"INSERT INTO users (email, password_hash, role, created_at) VALUES ($1, $2, $3, $4) RETURNING id",
-			req.Email, string(hash), "organizador", time.Now(),
+			req.Email, string(hash), targetRole, time.Now(),
 		).Scan(&newUserID)
 
 		if err != nil {
@@ -567,16 +605,33 @@ func RegisterPromoterHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 			return
 		}
 
+		var docID any = nil
+		if strings.TrimSpace(req.DocumentID) != "" {
+			docID = strings.TrimSpace(req.DocumentID)
+		}
+
 		_, err = tx.Exec(
 			`INSERT INTO organizer_profiles 
 			(user_id, full_name, phone, email, category, city, type_organizer, experience_area, document_id) 
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-			newUserID, req.FullName, req.Phone, req.Email, req.Category, req.City, typeOrg, req.ExperienceArea, req.DocumentID,
+			newUserID, req.FullName, req.Phone, req.Email, req.Category, req.City, typeOrg, req.ExperienceArea, docID,
 		)
 
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create profile"})
 			return
+		}
+
+		if len(req.AssignedEvents) > 0 {
+			for _, evID := range req.AssignedEvents {
+				if evID > 0 {
+					_, _ = tx.Exec(`
+						INSERT INTO user_assigned_events (user_id, event_id)
+						VALUES ($1, $2)
+						ON CONFLICT DO NOTHING
+					`, newUserID, evID)
+				}
+			}
 		}
 
 		if err := tx.Commit(); err != nil {
@@ -588,12 +643,13 @@ func RegisterPromoterHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 			"id":             newUserID,
 			"email":          req.Email,
 			"full_name":      req.FullName,
+			"role":           targetRole,
 			"type_organizer": typeOrg,
 		})
 	}
 }
 
-// ListUsersHandler lista todos los usuarios (organizadores y promotores) para el dashboard
+// ListUsersHandler lista todos los usuarios (organizadores, promotores y staff) para el dashboard
 func ListUsersHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -630,10 +686,16 @@ func ListUsersHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 				COALESCE(op.type_organizer, 'organizador'), 
 				COALESCE(op.experience_area, ''), 
 				COALESCE(op.document_id, ''), 
-				u.created_at
+				u.created_at,
+				COALESCE((
+					SELECT STRING_AGG(e.name, ', ')
+					FROM user_assigned_events uae
+					JOIN events e ON e.id = uae.event_id
+					WHERE uae.user_id = u.id
+				), '') as assigned_events_names
 			FROM users u
 			LEFT JOIN organizer_profiles op ON op.user_id = u.id
-			WHERE u.role IN ('organizador', 'promotor') OR (op.user_id IS NOT NULL AND u.role != 'cliente')
+			WHERE u.role IN ('organizador', 'promotor', 'staff_invitaciones') OR (op.user_id IS NOT NULL AND u.role != 'cliente')
 			ORDER BY u.created_at DESC
 		`)
 
@@ -646,11 +708,16 @@ func ListUsersHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 		users := make([]OrganizerProfile, 0)
 		for rows.Next() {
 			var org OrganizerProfile
+			var evNames string
 			if err := rows.Scan(
 				&org.ID, &org.FullName, &org.Email, &org.Phone, &org.Category, &org.City,
 				&org.Role, &org.TypeOrganizer, &org.ExperienceArea, &org.DocumentID, &org.CreatedAt,
+				&evNames,
 			); err == nil {
 				org.ContactName = org.FullName
+				if evNames != "" {
+					org.AssignedEventNames = strings.Split(evNames, ", ")
+				}
 				users = append(users, org)
 			}
 		}

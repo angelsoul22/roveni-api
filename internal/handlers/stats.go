@@ -599,7 +599,16 @@ func ExportAttendeesCSVHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 			return
 		}
 
-		if userRole != "administrador" && organizerID != userID {
+		hasPermission := userRole == "administrador" || organizerID == userID
+		if !hasPermission && userRole == "staff_invitaciones" {
+			var assignedCount int
+			_ = db.QueryRow("SELECT COUNT(*) FROM user_assigned_events WHERE user_id = $1 AND event_id = $2", userID, eventID).Scan(&assignedCount)
+			if assignedCount > 0 {
+				hasPermission = true
+			}
+		}
+
+		if !hasPermission {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden: cannot export this event"})
 			return
 		}
@@ -618,7 +627,9 @@ func ExportAttendeesCSVHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 			SELECT id, order_number, customer_name, customer_email, COALESCE(customer_phone, ''), 
 			       %s as amount_usd, status, created_at,
 			       COALESCE(rsvp_status, 'pending') as rsvp_status,
-			       rsvp_at
+			       rsvp_at,
+			       COALESCE(rsvp_notes, '') as rsvp_notes,
+			       COALESCE(event_zone, '') as event_zone
 			FROM purchases 
 			WHERE event_id = $1 AND status = 'completed'
 			ORDER BY created_at DESC
@@ -641,22 +652,24 @@ func ExportAttendeesCSVHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 			"Nombre del Asistente",
 			"Correo Electrónico",
 			"Teléfono",
+			"Zona",
 			"Detalle de Boletos",
 			headerAmount,
 			"Fecha de Emisión",
 			"Confirmación RSVP",
 			"Fecha Confirmación RSVP",
+			"Notas RSVP / Call Center",
 			"Estado Escáner / Ingreso",
 		})
 
 		for rows.Next() {
 			var purID int64
-			var orderNum, custName, custEmail, custPhone, status, rsvpStatus string
+			var orderNum, custName, custEmail, custPhone, status, rsvpStatus, rsvpNotes, eventZone string
 			var rsvpAt sql.NullTime
 			var amountUSD float64
 			var createdAt time.Time
 
-			if err := rows.Scan(&purID, &orderNum, &custName, &custEmail, &custPhone, &amountUSD, &status, &createdAt, &rsvpStatus, &rsvpAt); err == nil {
+			if err := rows.Scan(&purID, &orderNum, &custName, &custEmail, &custPhone, &amountUSD, &status, &createdAt, &rsvpStatus, &rsvpAt, &rsvpNotes, &eventZone); err == nil {
 				// Query ticket items
 				var itemsStr string
 				itemRows, itemErr := db.Query(`
@@ -686,12 +699,18 @@ func ExportAttendeesCSVHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 					scannedLabel = fmt.Sprintf("Ingresado (%d escaneos)", scanCount)
 				}
 
-				rsvpLabel := "Pendiente de Confirmar"
+				rsvpLabel := "Pendiente"
 				switch strings.ToLower(rsvpStatus) {
 				case "confirmed":
-					rsvpLabel = "Confirmada"
+					rsvpLabel = "Confirmado"
 				case "declined":
-					rsvpLabel = "Declinada / No Asistirá"
+					rsvpLabel = "No Asistirá / Declinado"
+				case "no_answer":
+					rsvpLabel = "No Contestó / Volver a llamar"
+				case "uncertain":
+					rsvpLabel = "Por Confirmar / En Duda"
+				case "wrong_phone":
+					rsvpLabel = "Teléfono Erróneo"
 				}
 
 				rsvpDateStr := "-"
@@ -704,11 +723,13 @@ func ExportAttendeesCSVHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 					custName,
 					custEmail,
 					custPhone,
+					eventZone,
 					itemsStr,
 					fmt.Sprintf("$%.2f", amountUSD),
 					createdAt.Format("2006-01-02 15:04:05"),
 					rsvpLabel,
 					rsvpDateStr,
+					rsvpNotes,
 					scannedLabel,
 				})
 			}

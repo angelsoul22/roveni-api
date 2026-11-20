@@ -29,6 +29,7 @@ type IssueCourtesyRequest struct {
 	RecipientEmail   string              `json:"recipient_email"`
 	RecipientPhone   string              `json:"recipient_phone"`
 	CourtesyNote     string              `json:"courtesy_note"`
+	EventZone        string              `json:"event_zone"`
 	TicketCategoryID int64               `json:"ticket_category_id"`
 	Quantity         int                 `json:"quantity"`
 	Items            []CourtesyItemInput `json:"items"`
@@ -41,21 +42,28 @@ type CourtesyPassSummary struct {
 	CustomerEmail string     `json:"customer_email"`
 	CustomerPhone string     `json:"customer_phone"`
 	CourtesyNote  string     `json:"courtesy_note"`
+	EventZone     string     `json:"event_zone"`
 	TotalTickets  int        `json:"total_tickets"`
 	Details       string     `json:"details"`
 	CreatedAt     time.Time  `json:"created_at"`
 	RSVPStatus    string     `json:"rsvp_status"`
 	RSVPAt        *time.Time `json:"rsvp_at,omitempty"`
+	RSVPNotes     string     `json:"rsvp_notes"`
 }
 
 type CourtesyListResponse struct {
-	EventID        int64                 `json:"event_id"`
-	EventName      string                `json:"event_name"`
-	CourtesyQuota  int                   `json:"courtesy_quota"`
-	IssuedCount    int                   `json:"issued_count"`
-	RemainingCount int                   `json:"remaining_count"`
-	ConfirmedCount int                   `json:"confirmed_count"`
-	Courtesies     []CourtesyPassSummary `json:"courtesies"`
+	EventID         int64                 `json:"event_id"`
+	EventName       string                `json:"event_name"`
+	CourtesyQuota   int                   `json:"courtesy_quota"`
+	IssuedCount     int                   `json:"issued_count"`
+	RemainingCount  int                   `json:"remaining_count"`
+	ConfirmedCount  int                   `json:"confirmed_count"`
+	DeclinedCount   int                   `json:"declined_count"`
+	NoAnswerCount   int                   `json:"no_answer_count"`
+	UncertainCount  int                   `json:"uncertain_count"`
+	WrongPhoneCount int                   `json:"wrong_phone_count"`
+	PendingCount    int                   `json:"pending_count"`
+	Courtesies      []CourtesyPassSummary `json:"courtesies"`
 }
 
 // IssueCourtesyTicketHandler handles generating free courtesy ticket passes and emailing them
@@ -135,7 +143,15 @@ func IssueCourtesyTicketHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc 
 			return
 		}
 
-		if user.Role != "administrador" && organizerID != user.ID {
+		hasPermission := user.Role == "administrador" || organizerID == user.ID
+		if !hasPermission && user.Role == "staff_invitaciones" {
+			var assignedCount int
+			_ = db.QueryRow("SELECT COUNT(*) FROM user_assigned_events WHERE user_id = $1 AND event_id = $2", user.ID, req.EventID).Scan(&assignedCount)
+			if assignedCount > 0 {
+				hasPermission = true
+			}
+		}
+		if !hasPermission {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "no tienes permiso para generar cortesías en este evento"})
 			return
 		}
@@ -191,14 +207,14 @@ func IssueCourtesyTicketHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc 
 				order_number, event_id, customer_name, customer_email, customer_phone,
 				subtotal, service_fee, total_amount, subtotal_usd, service_fee_usd, total_amount_usd,
 				currency, event_currency, exchange_rate, stripe_payment_intent_id, status,
-				is_courtesy, courtesy_note
+				is_courtesy, courtesy_note, event_zone
 			) VALUES (
 				$1, $2, $3, $4, $5,
 				0.00, 0.00, 0.00, 0.00, 0.00, 0.00,
 				$6, $6, 1.0, 'COURTESY_PASS', 'completed',
-				true, $7
+				true, $7, $8
 			) RETURNING id
-		`, orderNumber, req.EventID, req.RecipientName, req.RecipientEmail, req.RecipientPhone, currency, req.CourtesyNote).Scan(&purchaseID)
+		`, orderNumber, req.EventID, req.RecipientName, req.RecipientEmail, req.RecipientPhone, currency, req.CourtesyNote, strings.TrimSpace(req.EventZone)).Scan(&purchaseID)
 
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("error al guardar cortesía: %v", err)})
@@ -255,9 +271,9 @@ func IssueCourtesyTicketHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc 
 					}
 
 					_, errItem := tx.Exec(`
-						INSERT INTO purchase_items (purchase_id, ticket_category_id, ticket_name, price, price_usd, price_native, quantity, seat_id, seat_label)
-						VALUES ($1, $2, $3, 0.00, 0.00, 0.00, 1, $4, $5)
-					`, purchaseID, cid, catName, sID, seatLabel)
+						INSERT INTO purchase_items (purchase_id, ticket_category_id, ticket_name, price, price_usd, price_native, quantity, seat_id, seat_label, event_zone)
+						VALUES ($1, $2, $3, 0.00, 0.00, 0.00, 1, $4, $5, $6)
+					`, purchaseID, cid, catName, sID, seatLabel, strings.TrimSpace(req.EventZone))
 
 					if errItem != nil {
 						writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "error al guardar detalles de asiento de cortesía"})
@@ -294,9 +310,9 @@ func IssueCourtesyTicketHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc 
 				}
 
 				_, errItem := tx.Exec(`
-					INSERT INTO purchase_items (purchase_id, ticket_category_id, ticket_name, price, price_usd, price_native, quantity, seat_id, seat_label)
-					VALUES ($1, $2, $3, 0.00, 0.00, 0.00, $4, NULL, '')
-				`, purchaseID, cid, catName, qty)
+					INSERT INTO purchase_items (purchase_id, ticket_category_id, ticket_name, price, price_usd, price_native, quantity, seat_id, seat_label, event_zone)
+					VALUES ($1, $2, $3, 0.00, 0.00, 0.00, $4, NULL, '', $5)
+				`, purchaseID, cid, catName, qty, strings.TrimSpace(req.EventZone))
 
 				if errItem != nil {
 					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "error al guardar detalle de cortesía"})
@@ -351,6 +367,7 @@ func IssueCourtesyTicketHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc 
 							Price:            0.00,
 							Currency:         currency,
 							SeatLabel:        sLabel,
+							EventZone:        strings.TrimSpace(req.EventZone),
 							IsCourtesy:       !isInstitutionalInvitation,
 							IsPrivate:        isPrivate,
 							TicketDesignMode: designMode,
@@ -452,7 +469,16 @@ func GetCourtesyListHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 			return
 		}
 
-		if user.Role != "administrador" && organizerID != user.ID {
+		hasPermission := user.Role == "administrador" || organizerID == user.ID
+		if !hasPermission && user.Role == "staff_invitaciones" {
+			var assignedCount int
+			_ = db.QueryRow("SELECT COUNT(*) FROM user_assigned_events WHERE user_id = $1 AND event_id = $2", user.ID, eventID).Scan(&assignedCount)
+			if assignedCount > 0 {
+				hasPermission = true
+			}
+		}
+
+		if !hasPermission {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "sin autorización para ver cortesías de este evento"})
 			return
 		}
@@ -464,7 +490,9 @@ func GetCourtesyListHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 				COALESCE(SUM(pi.quantity), 0) as total_tickets,
 				COALESCE(STRING_AGG(CONCAT(pi.ticket_name, CASE WHEN pi.seat_label != '' THEN CONCAT(' (', pi.seat_label, ')') ELSE '' END), ', '), '') as details,
 				COALESCE(p.rsvp_status, 'pending') as rsvp_status,
-				p.rsvp_at
+				p.rsvp_at,
+				COALESCE(p.rsvp_notes, '') as rsvp_notes,
+				COALESCE(p.event_zone, '') as event_zone
 			FROM purchases p
 			JOIN purchase_items pi ON pi.purchase_id = p.id
 			WHERE p.event_id = $1 AND p.is_courtesy = true AND p.status = 'completed'
@@ -481,16 +509,36 @@ func GetCourtesyListHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 		var courtesies []CourtesyPassSummary
 		totalIssued := 0
 		totalConfirmed := 0
+		totalDeclined := 0
+		totalNoAnswer := 0
+		totalUncertain := 0
+		totalWrongPhone := 0
+		totalPending := 0
 
 		for rows.Next() {
 			var c CourtesyPassSummary
 			var rsvpAt sql.NullTime
-			if errScan := rows.Scan(&c.ID, &c.OrderNumber, &c.CustomerName, &c.CustomerEmail, &c.CustomerPhone, &c.CourtesyNote, &c.CreatedAt, &c.TotalTickets, &c.Details, &c.RSVPStatus, &rsvpAt); errScan == nil {
+			if errScan := rows.Scan(
+				&c.ID, &c.OrderNumber, &c.CustomerName, &c.CustomerEmail, &c.CustomerPhone,
+				&c.CourtesyNote, &c.CreatedAt, &c.TotalTickets, &c.Details,
+				&c.RSVPStatus, &rsvpAt, &c.RSVPNotes, &c.EventZone,
+			); errScan == nil {
 				if rsvpAt.Valid {
 					c.RSVPAt = &rsvpAt.Time
 				}
-				if c.RSVPStatus == "confirmed" {
+				switch c.RSVPStatus {
+				case "confirmed":
 					totalConfirmed += c.TotalTickets
+				case "declined":
+					totalDeclined += c.TotalTickets
+				case "no_answer":
+					totalNoAnswer += c.TotalTickets
+				case "uncertain":
+					totalUncertain += c.TotalTickets
+				case "wrong_phone":
+					totalWrongPhone += c.TotalTickets
+				default:
+					totalPending += c.TotalTickets
 				}
 				courtesies = append(courtesies, c)
 				totalIssued += c.TotalTickets
@@ -503,13 +551,125 @@ func GetCourtesyListHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 		}
 
 		writeJSON(w, http.StatusOK, CourtesyListResponse{
-			EventID:        eventID,
-			EventName:      eventName,
-			CourtesyQuota:  courtesyQuota,
-			IssuedCount:    totalIssued,
-			RemainingCount: remaining,
-			ConfirmedCount: totalConfirmed,
-			Courtesies:     courtesies,
+			EventID:         eventID,
+			EventName:       eventName,
+			CourtesyQuota:   courtesyQuota,
+			IssuedCount:     totalIssued,
+			RemainingCount:  remaining,
+			ConfirmedCount:  totalConfirmed,
+			DeclinedCount:   totalDeclined,
+			NoAnswerCount:   totalNoAnswer,
+			UncertainCount:  totalUncertain,
+			WrongPhoneCount: totalWrongPhone,
+			PendingCount:    totalPending,
+			Courtesies:      courtesies,
+		})
+	}
+}
+
+type UpdateCourtesyRSVPRequest struct {
+	PurchaseID int64  `json:"purchase_id"`
+	RSVPStatus string `json:"rsvp_status"`
+	RSVPNotes  string `json:"rsvp_notes"`
+}
+
+// UpdateCourtesyRSVPHandler allows organizers, admins and assigned staff to manually update an attendee's RSVP status and call notes.
+func UpdateCourtesyRSVPHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+			return
+		}
+
+		user, err := GetAuthenticatedUser(r, db, rdb)
+		if err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+
+		var req UpdateCourtesyRSVPRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cuerpo de solicitud inválido"})
+			return
+		}
+
+		if req.PurchaseID <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "purchase_id es requerido"})
+			return
+		}
+
+		// Verify purchase, event and permissions
+		var eventID, organizerID int64
+		err = db.QueryRow(`
+			SELECT p.event_id, e.organizer_id 
+			FROM purchases p
+			JOIN events e ON e.id = p.event_id
+			WHERE p.id = $1
+		`, req.PurchaseID).Scan(&eventID, &organizerID)
+
+		if err != nil {
+			if err == sql.ErrNoRows {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "registro no encontrado"})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db error"})
+			return
+		}
+
+		hasPermission := user.Role == "administrador" || organizerID == user.ID
+		if !hasPermission && user.Role == "staff_invitaciones" {
+			var assignedCount int
+			_ = db.QueryRow("SELECT COUNT(*) FROM user_assigned_events WHERE user_id = $1 AND event_id = $2", user.ID, eventID).Scan(&assignedCount)
+			if assignedCount > 0 {
+				hasPermission = true
+			}
+		}
+
+		if !hasPermission {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "sin autorización para modificar este registro"})
+			return
+		}
+
+		// Normalize status
+		status := strings.ToLower(strings.TrimSpace(req.RSVPStatus))
+		validStatuses := map[string]bool{
+			"confirmed":   true,
+			"declined":    true,
+			"no_answer":   true,
+			"uncertain":   true,
+			"wrong_phone": true,
+			"pending":     true,
+		}
+		if !validStatuses[status] {
+			status = "confirmed"
+		}
+
+		var rsvpAt *time.Time
+		if status != "pending" {
+			now := time.Now()
+			rsvpAt = &now
+		}
+
+		notes := strings.TrimSpace(req.RSVPNotes)
+
+		_, err = db.Exec(`
+			UPDATE purchases 
+			SET rsvp_status = $1, rsvp_notes = $2, rsvp_at = $3
+			WHERE id = $4
+		`, status, notes, rsvpAt, req.PurchaseID)
+
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "error al actualizar respuesta"})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"success":     true,
+			"purchase_id": req.PurchaseID,
+			"rsvp_status": status,
+			"rsvp_notes":  notes,
+			"rsvp_at":     rsvpAt,
+			"message":     "Estado de asistencia actualizado correctamente",
 		})
 	}
 }
