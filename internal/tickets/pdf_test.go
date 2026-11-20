@@ -126,3 +126,47 @@ func TestSingleTicketPDFCounter(t *testing.T) {
 		})
 	}
 }
+
+func TestInstitutionalInvitationWithZone(t *testing.T) {
+	data := TicketPDFData{
+		OrderNumber:      "RV-000001",
+		TicketSerial:     "RV-000001-01",
+		TicketIndex:      1,
+		TotalTickets:     1,
+		EventName:        "Primer Informe de Actividades de la Presidencia de la FEU 2026",
+		VenueAddress:     "Sala 2 del Conjunto Santander de Artes Escénicas",
+		City:             "Guadalajara",
+		Country:          "México",
+		EventDate:        "2026-11-25",
+		DoorsOpenTime:    "12:00",
+		ShowStartTime:    "13:00",
+		CategoryName:     "Invitación Oficial",
+		CustomerName:     "Mtra. Karla Alejandrina Planter Perez",
+		CustomerEmail:    "karla.planter@udg.mx",
+		Price:            0.00,
+		Currency:         "MXN",
+		EventZone:        "Azul Rey",
+		IsPrivate:        true,
+		TicketDesignMode: "invitacion",
+		TicketAdImage:    "/uploads/ads/ticket_ad_informe.png",
+	}
+
+	path, err := GenerateSingleTicketPDF(data)
+	if err != nil {
+		t.Fatalf("unexpected error generating ticket PDF: %v", err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read generated PDF: %v", err)
+	}
+
+	if !strings.Contains(string(content), "ZONA:") {
+		t.Errorf("expected 'ZONA:' label in PDF")
+	}
+	if !strings.Contains(string(content), "AZUL REY") {
+		t.Errorf("expected 'AZUL REY' in PDF")
+	}
+
+	_ = os.Rename(path, "/tmp/invitacion_con_zona.pdf")
+}

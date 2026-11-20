@@ -188,6 +188,16 @@ func GenerateSingleTicketPDF(data TicketPDFData) (string, error) {
 	pdf.SetXY(14, currY+0.6)
 	pdf.Cell(60, 4.3, tr(fmt.Sprintf("CATEGORIA: %s", strings.ToUpper(data.CategoryName))))
 
+	// Zone Badge (Si el boleto tiene zona protocolaria asignada)
+	if strings.TrimSpace(data.EventZone) != "" {
+		pdf.SetFillColor(10, 11, 14)
+		pdf.Rect(79, currY, 55, 5.5, "F")
+		pdf.SetFont("Helvetica", "B", 7.5)
+		pdf.SetTextColor(208, 192, 173)
+		pdf.SetXY(79, currY+0.6)
+		pdf.CellFormat(55, 4.3, tr(fmt.Sprintf("ZONA: %s", strings.ToUpper(strings.TrimSpace(data.EventZone)))), "", 0, "C", false, 0, "")
+	}
+
 	currY += 7.2
 
 	// --- LUGAR ---
@@ -368,17 +378,41 @@ func GenerateSingleTicketPDF(data TicketPDFData) (string, error) {
 	if isInvitation {
 		pdf.SetFillColor(10, 11, 14)
 		pdf.Rect(146, 96, 54, 18, "F")
-		pdf.SetFont("Helvetica", "B", 11)
-		pdf.SetTextColor(208, 192, 173)
-		pdf.SetXY(146, 101)
-		pdf.CellFormat(54, 8, tr("INVITADO ESPECIAL"), "", 0, "C", false, 0, "")
+		if strings.TrimSpace(data.EventZone) != "" {
+			pdf.SetFont("Helvetica", "B", 9)
+			pdf.SetTextColor(208, 192, 173)
+			pdf.SetXY(146, 98.5)
+			pdf.CellFormat(54, 5, tr("INVITADO ESPECIAL"), "", 0, "C", false, 0, "")
+
+			pdf.SetFont("Helvetica", "B", 8)
+			pdf.SetTextColor(255, 255, 255)
+			pdf.SetXY(146, 104.5)
+			pdf.CellFormat(54, 5, tr(fmt.Sprintf("ZONA: %s", strings.ToUpper(strings.TrimSpace(data.EventZone)))), "", 0, "C", false, 0, "")
+		} else {
+			pdf.SetFont("Helvetica", "B", 11)
+			pdf.SetTextColor(208, 192, 173)
+			pdf.SetXY(146, 101)
+			pdf.CellFormat(54, 8, tr("INVITADO ESPECIAL"), "", 0, "C", false, 0, "")
+		}
 	} else if isCourtesy {
 		pdf.SetFillColor(67, 9, 31) // Dark Red #b41e1e
 		pdf.Rect(146, 96, 54, 18, "F")
-		pdf.SetFont("Helvetica", "B", 13)
-		pdf.SetTextColor(255, 255, 255)
-		pdf.SetXY(146, 101)
-		pdf.CellFormat(54, 8, tr("CORTESÍA"), "", 0, "C", false, 0, "")
+		if strings.TrimSpace(data.EventZone) != "" {
+			pdf.SetFont("Helvetica", "B", 9)
+			pdf.SetTextColor(255, 255, 255)
+			pdf.SetXY(146, 98.5)
+			pdf.CellFormat(54, 5, tr("CORTESÍA"), "", 0, "C", false, 0, "")
+
+			pdf.SetFont("Helvetica", "B", 8)
+			pdf.SetTextColor(255, 255, 255)
+			pdf.SetXY(146, 104.5)
+			pdf.CellFormat(54, 5, tr(fmt.Sprintf("ZONA: %s", strings.ToUpper(strings.TrimSpace(data.EventZone)))), "", 0, "C", false, 0, "")
+		} else {
+			pdf.SetFont("Helvetica", "B", 13)
+			pdf.SetTextColor(255, 255, 255)
+			pdf.SetXY(146, 101)
+			pdf.CellFormat(54, 8, tr("CORTESÍA"), "", 0, "C", false, 0, "")
+		}
 	} else {
 		pdf.SetFont("Helvetica", "B", 6)
 		pdf.SetTextColor(90, 78, 64)

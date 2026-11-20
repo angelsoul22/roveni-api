@@ -645,10 +645,13 @@ func ConfirmCheckoutHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 			designMode = "invitacion"
 		}
 
-		// Generate 1 PDF ticket per unit purchased with exact seat_label
+		// Generate 1 PDF ticket per unit purchased with exact seat_label and event_zone
+		var purchaseEventZone string
+		_ = db.QueryRow(`SELECT COALESCE(event_zone, '') FROM purchases WHERE id = $1`, purchaseID).Scan(&purchaseEventZone)
+
 		var pdfTicketList []tickets.TicketPDFData
 		itemRows, errItems := db.Query(`
-			SELECT ticket_name, price, quantity, COALESCE(seat_label, '')
+			SELECT ticket_name, price, quantity, COALESCE(seat_label, ''), COALESCE(event_zone, '')
 			FROM purchase_items
 			WHERE purchase_id = $1
 		`, purchaseID)
@@ -656,10 +659,14 @@ func ConfirmCheckoutHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 		if errItems == nil {
 			ticketSerialIndex := 1
 			for itemRows.Next() {
-				var tName, sLabel string
+				var tName, sLabel, itemEventZone string
 				var price float64
 				var qty int
-				if errScan := itemRows.Scan(&tName, &price, &qty, &sLabel); errScan == nil {
+				if errScan := itemRows.Scan(&tName, &price, &qty, &sLabel, &itemEventZone); errScan == nil {
+					zoneToUse := strings.TrimSpace(itemEventZone)
+					if zoneToUse == "" {
+						zoneToUse = strings.TrimSpace(purchaseEventZone)
+					}
 					for q := 0; q < qty; q++ {
 						pdfTicketList = append(pdfTicketList, tickets.TicketPDFData{
 							OrderNumber:      req.OrderNumber,
@@ -670,6 +677,7 @@ func ConfirmCheckoutHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 							Price:            price,
 							Currency:         currency,
 							SeatLabel:        sLabel,
+							EventZone:        zoneToUse,
 							IsPrivate:        isPrivate,
 							TicketDesignMode: designMode,
 							TicketAdImage:    ticketAdImageURL,
@@ -742,13 +750,13 @@ func DownloadTicketsPDFHandler(db *sql.DB) http.HandlerFunc {
 
 		// Query purchase and event details
 		var eventID int64
-		var customerName, customerEmail, currency string
+		var customerName, customerEmail, currency, purchaseEventZone string
 		var isCourtesy bool
 		err := db.QueryRow(`
-			SELECT event_id, customer_name, customer_email, currency, COALESCE(is_courtesy, false) 
+			SELECT event_id, customer_name, customer_email, currency, COALESCE(is_courtesy, false), COALESCE(event_zone, '') 
 			FROM purchases 
 			WHERE order_number = $1
-		`, orderNumber).Scan(&eventID, &customerName, &customerEmail, &currency, &isCourtesy)
+		`, orderNumber).Scan(&eventID, &customerName, &customerEmail, &currency, &isCourtesy, &purchaseEventZone)
 
 		if err != nil {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Orden no encontrada en la base de datos"})
@@ -777,7 +785,7 @@ func DownloadTicketsPDFHandler(db *sql.DB) http.HandlerFunc {
 		}
 
 		rows, err := db.Query(`
-			SELECT ticket_name, price, quantity, COALESCE(seat_label, '') 
+			SELECT ticket_name, price, quantity, COALESCE(seat_label, ''), COALESCE(event_zone, '') 
 			FROM purchase_items 
 			WHERE purchase_id = (SELECT id FROM purchases WHERE order_number = $1)
 		`, orderNumber)
@@ -791,13 +799,17 @@ func DownloadTicketsPDFHandler(db *sql.DB) http.HandlerFunc {
 		var pdfTicketList []tickets.TicketPDFData
 		ticketSerialIndex := 1
 		for rows.Next() {
-			var catName, sLabel string
+			var catName, sLabel, itemEventZone string
 			var price float64
 			var qty int
-			if err := rows.Scan(&catName, &price, &qty, &sLabel); err == nil {
+			if err := rows.Scan(&catName, &price, &qty, &sLabel, &itemEventZone); err == nil {
 				categoryDisplay := catName
 				if isCourtesy && !isInstitutionalInvitation && !strings.Contains(strings.ToUpper(catName), "CORTES") {
 					categoryDisplay = catName + " (CORTESÍA)"
+				}
+				zoneToUse := strings.TrimSpace(itemEventZone)
+				if zoneToUse == "" {
+					zoneToUse = strings.TrimSpace(purchaseEventZone)
 				}
 				for q := 0; q < qty; q++ {
 					pdfTicketList = append(pdfTicketList, tickets.TicketPDFData{
@@ -809,6 +821,7 @@ func DownloadTicketsPDFHandler(db *sql.DB) http.HandlerFunc {
 						Price:            price,
 						Currency:         currency,
 						SeatLabel:        sLabel,
+						EventZone:        zoneToUse,
 						IsCourtesy:       isCourtesy && !isInstitutionalInvitation,
 						IsPrivate:        isPrivate,
 						TicketDesignMode: designMode,
@@ -907,8 +920,11 @@ func DownloadTicketsZipHandler(db *sql.DB) http.HandlerFunc {
 			designMode = "cortesia"
 		}
 
+		var purchaseEventZone string
+		_ = db.QueryRow(`SELECT COALESCE(event_zone, '') FROM purchases WHERE id = $1`, purchaseID).Scan(&purchaseEventZone)
+
 		rows, err := db.Query(`
-			SELECT ticket_name, price, quantity, COALESCE(seat_label, '') 
+			SELECT ticket_name, price, quantity, COALESCE(seat_label, ''), COALESCE(event_zone, '') 
 			FROM purchase_items 
 			WHERE purchase_id = $1
 		`, purchaseID)
@@ -921,13 +937,17 @@ func DownloadTicketsZipHandler(db *sql.DB) http.HandlerFunc {
 		var pdfTicketList []tickets.TicketPDFData
 		ticketSerialIndex := 1
 		for rows.Next() {
-			var catName, sLabel string
+			var catName, sLabel, itemEventZone string
 			var price float64
 			var qty int
-			if err := rows.Scan(&catName, &price, &qty, &sLabel); err == nil {
+			if err := rows.Scan(&catName, &price, &qty, &sLabel, &itemEventZone); err == nil {
 				categoryDisplay := catName
 				if isCourtesy && !isInstitutionalInvitation && !strings.Contains(strings.ToUpper(catName), "CORTES") {
 					categoryDisplay = catName + " (CORTESÍA)"
+				}
+				zoneToUse := strings.TrimSpace(itemEventZone)
+				if zoneToUse == "" {
+					zoneToUse = strings.TrimSpace(purchaseEventZone)
 				}
 				for q := 0; q < qty; q++ {
 					pdfTicketList = append(pdfTicketList, tickets.TicketPDFData{
@@ -937,6 +957,7 @@ func DownloadTicketsZipHandler(db *sql.DB) http.HandlerFunc {
 						Price:            price,
 						Currency:         currency,
 						SeatLabel:        sLabel,
+						EventZone:        zoneToUse,
 						IsCourtesy:       isCourtesy && !isInstitutionalInvitation,
 						IsPrivate:        isPrivate,
 						TicketDesignMode: designMode,

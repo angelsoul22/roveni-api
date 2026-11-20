@@ -331,7 +331,7 @@ func IssueCourtesyTicketHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc 
 		var emailTickets []mailer.TicketItem
 
 		itemRows, errItems := db.Query(`
-			SELECT ticket_name, price, quantity, COALESCE(seat_label, '')
+			SELECT ticket_name, price, quantity, COALESCE(seat_label, ''), COALESCE(event_zone, '')
 			FROM purchase_items
 			WHERE purchase_id = $1
 		`, purchaseID)
@@ -339,10 +339,14 @@ func IssueCourtesyTicketHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc 
 		if errItems == nil {
 			ticketSerialIndex := 1
 			for itemRows.Next() {
-				var tName, sLabel string
+				var tName, sLabel, itemZone string
 				var price float64
 				var qty int
-				if errScan := itemRows.Scan(&tName, &price, &qty, &sLabel); errScan == nil {
+				if errScan := itemRows.Scan(&tName, &price, &qty, &sLabel, &itemZone); errScan == nil {
+					zoneToUse := strings.TrimSpace(itemZone)
+					if zoneToUse == "" {
+						zoneToUse = strings.TrimSpace(req.EventZone)
+					}
 					emailTickets = append(emailTickets, mailer.TicketItem{
 						Name:     tName,
 						Quantity: qty,
@@ -367,7 +371,7 @@ func IssueCourtesyTicketHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc 
 							Price:            0.00,
 							Currency:         currency,
 							SeatLabel:        sLabel,
-							EventZone:        strings.TrimSpace(req.EventZone),
+							EventZone:        zoneToUse,
 							IsCourtesy:       !isInstitutionalInvitation,
 							IsPrivate:        isPrivate,
 							TicketDesignMode: designMode,
@@ -670,6 +674,193 @@ func UpdateCourtesyRSVPHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 			"rsvp_notes":  notes,
 			"rsvp_at":     rsvpAt,
 			"message":     "Estado de asistencia actualizado correctamente",
+		})
+	}
+}
+
+type ResendCourtesyRequest struct {
+	OrderNumber string `json:"order_number"`
+}
+
+// ResendCourtesyTicketHandler re-generates the updated ticket PDF (with Zone and styling) and re-emails the attendee
+func ResendCourtesyTicketHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+			return
+		}
+
+		user, err := GetAuthenticatedUser(r, db, rdb)
+		if err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+
+		var req ResendCourtesyRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cuerpo de solicitud inválido"})
+			return
+		}
+
+		req.OrderNumber = strings.TrimSpace(req.OrderNumber)
+		if req.OrderNumber == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "order_number es requerido"})
+			return
+		}
+
+		var purchaseID, eventID, organizerID int64
+		var customerName, customerEmail, currency, purchaseEventZone string
+		var isCourtesy bool
+		err = db.QueryRow(`
+			SELECT p.id, p.event_id, e.organizer_id, p.customer_name, p.customer_email, p.currency, COALESCE(p.is_courtesy, false), COALESCE(p.event_zone, '')
+			FROM purchases p
+			JOIN events e ON e.id = p.event_id
+			WHERE p.order_number = $1
+		`, req.OrderNumber).Scan(&purchaseID, &eventID, &organizerID, &customerName, &customerEmail, &currency, &isCourtesy, &purchaseEventZone)
+
+		if err != nil {
+			if err == sql.ErrNoRows {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "registro no encontrado"})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "error en base de datos"})
+			return
+		}
+
+		hasPermission := user.Role == "administrador" || organizerID == user.ID
+		if !hasPermission && user.Role == "staff_invitaciones" {
+			var assignedCount int
+			_ = db.QueryRow("SELECT COUNT(*) FROM user_assigned_events WHERE user_id = $1 AND event_id = $2", user.ID, eventID).Scan(&assignedCount)
+			if assignedCount > 0 {
+				hasPermission = true
+			}
+		}
+
+		if !hasPermission {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "sin autorización para reenviar cortesías de este evento"})
+			return
+		}
+
+		var eventName, eventImage, eventDate, doorsOpenTime, showStartTime, venueAddress, city, country, ticketAdImageURL, privateType, accessCode string
+		var isPrivate bool
+		err = db.QueryRow(`
+			SELECT name, COALESCE(image_url, ''), event_date, doors_open_time, show_start_time, venue_address, city, country, COALESCE(ticket_ad_image_url, ''), COALESCE(is_private, false), COALESCE(private_type, 'interactivo'), COALESCE(access_code, '')
+			FROM events
+			WHERE id = $1
+		`, eventID).Scan(&eventName, &eventImage, &eventDate, &doorsOpenTime, &showStartTime, &venueAddress, &city, &country, &ticketAdImageURL, &isPrivate, &privateType, &accessCode)
+
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "error al obtener evento"})
+			return
+		}
+
+		isInstitutionalInvitation := isPrivate && strings.ToLower(strings.TrimSpace(privateType)) == "solo_lectura"
+		designMode := ""
+		if isInstitutionalInvitation {
+			designMode = "invitacion"
+		} else if isCourtesy {
+			designMode = "cortesia"
+		}
+
+		rows, err := db.Query(`
+			SELECT ticket_name, price, quantity, COALESCE(seat_label, ''), COALESCE(event_zone, '')
+			FROM purchase_items
+			WHERE purchase_id = $1
+		`, purchaseID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "error al consultar boletos"})
+			return
+		}
+		defer rows.Close()
+
+		var pdfTicketList []tickets.TicketPDFData
+		var emailTickets []mailer.TicketItem
+		ticketSerialIndex := 1
+		for rows.Next() {
+			var catName, sLabel, itemEventZone string
+			var price float64
+			var qty int
+			if err := rows.Scan(&catName, &price, &qty, &sLabel, &itemEventZone); err == nil {
+				emailTickets = append(emailTickets, mailer.TicketItem{
+					Name:     catName,
+					Quantity: qty,
+					Price:    0.00,
+				})
+				categoryDisplay := catName
+				if isCourtesy && !isInstitutionalInvitation && !strings.Contains(strings.ToUpper(catName), "CORTES") {
+					categoryDisplay = catName + " (CORTESÍA)"
+				}
+				zoneToUse := strings.TrimSpace(itemEventZone)
+				if zoneToUse == "" {
+					zoneToUse = strings.TrimSpace(purchaseEventZone)
+				}
+				for q := 0; q < qty; q++ {
+					pdfTicketList = append(pdfTicketList, tickets.TicketPDFData{
+						OrderNumber:      req.OrderNumber,
+						TicketSerial:     fmt.Sprintf("%s-%02d", req.OrderNumber, ticketSerialIndex),
+						CategoryName:     categoryDisplay,
+						CustomerName:     customerName,
+						CustomerEmail:    customerEmail,
+						Price:            0.00,
+						Currency:         currency,
+						SeatLabel:        sLabel,
+						EventZone:        zoneToUse,
+						IsCourtesy:       !isInstitutionalInvitation,
+						IsPrivate:        isPrivate,
+						TicketDesignMode: designMode,
+						TicketAdImage:    ticketAdImageURL,
+					})
+					ticketSerialIndex++
+				}
+			}
+		}
+
+		if len(pdfTicketList) == 0 {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "no se encontraron boletos para esta orden"})
+			return
+		}
+
+		pdfPaths, pdfErr := tickets.GenerateAllTicketsForOrder(
+			req.OrderNumber, customerName, customerEmail,
+			eventName, eventImage, venueAddress, city, country,
+			eventDate, doorsOpenTime, showStartTime, pdfTicketList,
+		)
+		if pdfErr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("error al regenerar PDF: %v", pdfErr)})
+			return
+		}
+
+		// Send email synchronously to report actual status
+		emailData := mailer.EmailData{
+			To:             customerEmail,
+			CustomerName:   customerName,
+			OrderNumber:    req.OrderNumber,
+			EventID:        eventID,
+			EventName:      eventName,
+			EventDate:      eventDate,
+			ShowTime:       showStartTime,
+			VenueAddress:   venueAddress,
+			City:           city,
+			Tickets:        emailTickets,
+			Subtotal:       0.00,
+			ServiceFee:     0.00,
+			TotalAmount:    0.00,
+			Currency:       currency,
+			PdfAttachments: pdfPaths,
+			IsCourtesy:     true,
+			IsPrivate:      isPrivate,
+			PrivateType:    privateType,
+			AccessCode:     accessCode,
+		}
+
+		if errMail := mailer.SendPurchaseConfirmationEmail(emailData); errMail != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("error al enviar correo: %v", errMail)})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"success": true,
+			"message": fmt.Sprintf("Invitación oficial con PDF actualizado reenviada exitosamente a %s", customerEmail),
 		})
 	}
 }
