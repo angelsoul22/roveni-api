@@ -143,14 +143,13 @@ func IssueCourtesyTicketHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc 
 			return
 		}
 
-		hasPermission := user.Role == "administrador" || organizerID == user.ID
-		if !hasPermission && user.Role == "staff_invitaciones" {
-			var assignedCount int
-			_ = db.QueryRow("SELECT COUNT(*) FROM user_assigned_events WHERE user_id = $1 AND event_id = $2", user.ID, req.EventID).Scan(&assignedCount)
-			if assignedCount > 0 {
-				hasPermission = true
-			}
+		// Restricción: El rol staff_invitaciones (Call Center) no tiene permitido emitir invitaciones
+		if user.Role == "staff_invitaciones" {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "el personal de staff / call center no tiene autorización para emitir invitaciones"})
+			return
 		}
+
+		hasPermission := user.Role == "administrador" || organizerID == user.ID
 		if !hasPermission {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "no tienes permiso para generar cortesías en este evento"})
 			return
