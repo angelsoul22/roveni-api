@@ -149,6 +149,60 @@ func deleteSessionStore(rdb *redis.Client, db *sql.DB, sessionID string) {
 	}
 }
 
+// DeleteAllSessionsForUser revoca y elimina de forma exhaustiva todas las sesiones de un usuario en Redis, memoria RAM y PostgreSQL
+func DeleteAllSessionsForUser(rdb *redis.Client, db *sql.DB, userID int64) error {
+	if userID <= 0 {
+		return nil
+	}
+
+	targetDB := db
+	if targetDB == nil {
+		targetDB = globalDB
+	}
+
+	var sessionIDs []string
+	if targetDB != nil {
+		rows, err := targetDB.Query("SELECT id FROM user_sessions WHERE user_id = $1", userID)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var sID string
+				if errScan := rows.Scan(&sID); errScan == nil && sID != "" {
+					sessionIDs = append(sessionIDs, sID)
+				}
+			}
+		}
+		_, _ = targetDB.Exec("DELETE FROM user_sessions WHERE user_id = $1", userID)
+	}
+
+	// Eliminar de Redis
+	if rdb != nil {
+		ctx := context.Background()
+		for _, sID := range sessionIDs {
+			_ = rdb.Del(ctx, "session:"+sID).Err()
+		}
+	}
+
+	// Eliminar de fallbackSessions en memoria RAM
+	userIDStr := fmt.Sprintf("%d", userID)
+	for _, sID := range sessionIDs {
+		fallbackSessions.Delete(sID)
+	}
+	fallbackSessions.Range(func(key, value any) bool {
+		if value == userIDStr {
+			fallbackSessions.Delete(key)
+			if rdb != nil {
+				if sKey, ok := key.(string); ok {
+					_ = rdb.Del(context.Background(), "session:"+sKey).Err()
+				}
+			}
+		}
+		return true
+	})
+
+	return nil
+}
+
 type AuthUser struct {
 	ID       int64  `json:"id"`
 	Email    string `json:"email"`

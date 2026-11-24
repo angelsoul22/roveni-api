@@ -106,6 +106,7 @@ func main() {
 	mux.HandleFunc("/users/me", handlers.GetMeHandler(db, rdb))
 	mux.HandleFunc("/users/logout", handlers.LogoutUserHandler(db, rdb))
 	mux.HandleFunc("/users/my-tickets", handlers.GetMyTicketsHandler(db, rdb))
+	mux.HandleFunc("/users/admin-update-password", handlers.AdminChangeUserPasswordHandler(db, rdb))
 
 	mux.HandleFunc("/events/create", handlers.CreateEventHandler(db, rdb))
 	mux.HandleFunc("/events/update", handlers.UpdateEventHandler(db, rdb))
@@ -138,6 +139,8 @@ func main() {
 	mux.HandleFunc("/organizers/events/courtesy-list", handlers.GetCourtesyListHandler(db, rdb))
 	mux.HandleFunc("/organizers/events/courtesy-rsvp", handlers.UpdateCourtesyRSVPHandler(db, rdb))
 	mux.HandleFunc("/organizers/events/resend-courtesy", handlers.ResendCourtesyTicketHandler(db, rdb))
+	mux.HandleFunc("/organizers/events/generate-group-tickets", handlers.GenerateGroupTicketsHandler(db, rdb))
+	mux.HandleFunc("/organizers/events/group-tickets-list", handlers.GetGroupTicketsListHandler(db, rdb))
 	mux.HandleFunc("/dashboard/overview", handlers.GetDashboardOverviewHandler(db, rdb))
 
 	mux.Handle("/uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir("./uploads"))))

@@ -79,32 +79,20 @@ func GenerateTicketQRPayload(data TicketPDFData) (string, string) {
 	return string(jsonBytes), signature[:16]
 }
 
-func GenerateSingleTicketPDF(data TicketPDFData) (string, error) {
+func RenderTicketCardToPDF(pdf *gofpdf.Fpdf, data TicketPDFData) error {
 	outputDir := filepath.Join(".", "uploads", "tickets")
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create tickets directory: %w", err)
-	}
-
-	pdfPath := filepath.Join(outputDir, fmt.Sprintf("%s_%s.pdf", data.OrderNumber, data.TicketSerial))
+	_ = os.MkdirAll(outputDir, 0755)
 
 	// 1. Generate QR Code image PNG
 	qrPayload, qrSig := GenerateTicketQRPayload(data)
-	qrPath := filepath.Join(outputDir, fmt.Sprintf("qr_%s_%s.png", data.OrderNumber, data.TicketSerial))
+	qrPath := filepath.Join(outputDir, fmt.Sprintf("qr_%s_%s_%d.png", data.OrderNumber, data.TicketSerial, time.Now().UnixNano()))
 
 	err := qrcode.WriteFile(qrPayload, qrcode.Medium, 256, qrPath)
 	if err != nil {
-		return "", fmt.Errorf("failed to generate QR code: %w", err)
+		return fmt.Errorf("failed to generate QR code: %w", err)
 	}
 	defer os.Remove(qrPath)
 
-	// 2. Initialize PDF in Landscape Card Format (210mm x 120mm)
-	pdf := gofpdf.NewCustom(&gofpdf.InitType{
-		UnitStr: "mm",
-		Size:    gofpdf.SizeType{Wd: 210, Ht: 120},
-	})
-	pdf.SetMargins(0, 0, 0)
-	pdf.SetAutoPageBreak(false, 0)
-	pdf.SetCompression(false)
 	pdf.AddPage()
 	tr := pdf.UnicodeTranslatorFromDescriptor("")
 
@@ -420,17 +408,76 @@ func GenerateSingleTicketPDF(data TicketPDFData) (string, error) {
 		pdf.MultiCell(55, 3, "Escaneo exclusivo por Roveni Scanner.", "", "C", false)
 	}
 
-	// Validar si la librería acumuló errores internos
+	return nil
+}
+
+func GenerateSingleTicketPDF(data TicketPDFData) (string, error) {
+	outputDir := filepath.Join(".", "uploads", "tickets")
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create tickets directory: %w", err)
+	}
+
+	pdfPath := filepath.Join(outputDir, fmt.Sprintf("%s_%s.pdf", data.OrderNumber, data.TicketSerial))
+
+	pdf := gofpdf.NewCustom(&gofpdf.InitType{
+		UnitStr: "mm",
+		Size:    gofpdf.SizeType{Wd: 210, Ht: 120},
+	})
+	pdf.SetMargins(0, 0, 0)
+	pdf.SetAutoPageBreak(false, 0)
+	pdf.SetCompression(false)
+
+	if err := RenderTicketCardToPDF(pdf, data); err != nil {
+		return "", err
+	}
+
 	if pdf.Err() {
 		return "", fmt.Errorf("gofpdf internal error rendering pdf: %w", pdf.Error())
 	}
 
-	err = pdf.OutputFileAndClose(pdfPath)
+	err := pdf.OutputFileAndClose(pdfPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to save ticket PDF: %w", err)
 	}
 
 	return pdfPath, nil
+}
+
+// GenerateCombinedTicketsPDF compiles multiple ticket cards into a single multi-page PDF document
+func GenerateCombinedTicketsPDF(ticketsList []TicketPDFData, outputPath string) (string, error) {
+	outputDir := filepath.Join(".", "uploads", "tickets")
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create tickets directory: %w", err)
+	}
+
+	if outputPath == "" && len(ticketsList) > 0 {
+		outputPath = filepath.Join(outputDir, fmt.Sprintf("%s_TODOS.pdf", ticketsList[0].OrderNumber))
+	}
+
+	pdf := gofpdf.NewCustom(&gofpdf.InitType{
+		UnitStr: "mm",
+		Size:    gofpdf.SizeType{Wd: 210, Ht: 120},
+	})
+	pdf.SetMargins(0, 0, 0)
+	pdf.SetAutoPageBreak(false, 0)
+	pdf.SetCompression(false)
+
+	for _, t := range ticketsList {
+		if err := RenderTicketCardToPDF(pdf, t); err != nil {
+			return "", err
+		}
+	}
+
+	if pdf.Err() {
+		return "", fmt.Errorf("gofpdf internal error rendering combined pdf: %w", pdf.Error())
+	}
+
+	err := pdf.OutputFileAndClose(outputPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to save combined tickets PDF: %w", err)
+	}
+
+	return outputPath, nil
 }
 
 func GenerateAllTicketsForOrder(

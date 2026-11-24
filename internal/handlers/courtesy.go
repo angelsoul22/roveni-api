@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -862,5 +863,307 @@ func ResendCourtesyTicketHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc
 			"success": true,
 			"message": fmt.Sprintf("Invitación oficial con PDF actualizado reenviada exitosamente a %s", customerEmail),
 		})
+	}
+}
+
+type GenerateGroupTicketsRequest struct {
+	EventID    int64  `json:"event_id"`
+	GroupName  string `json:"group_name"`  // ej: "Grupo A", "Prensa UDG", "Delegación"
+	Quantity   int    `json:"quantity"`    // ej: 25
+	EventZone  string `json:"event_zone"`  // ej: "Azul Rey", "Dorado"
+	CategoryID int64  `json:"category_id"` // opcional
+	Note       string `json:"note"`        // opcional
+}
+
+type GroupBatchSummary struct {
+	ID           int64     `json:"id"`
+	OrderNumber  string    `json:"order_number"`
+	GroupName    string    `json:"group_name"`
+	Quantity     int       `json:"quantity"`
+	EventZone    string    `json:"event_zone"`
+	CourtesyNote string    `json:"courtesy_note"`
+	CreatedAt    time.Time `json:"created_at"`
+	ScannedCount int       `json:"scanned_count"`
+	DownloadPDF  string    `json:"download_pdf_url"`
+	DownloadZip  string    `json:"download_zip_url"`
+}
+
+// GenerateGroupTicketsHandler genera pases de acceso y códigos QR en lote para grupos/delegaciones
+// sin necesidad de registrar correos individuales ni enviar notificaciones por correo.
+func GenerateGroupTicketsHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+			return
+		}
+
+		user, err := GetAuthenticatedUser(r, db, rdb)
+		if err != nil || user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "sesión requerida"})
+			return
+		}
+
+		var req GenerateGroupTicketsRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cuerpo de solicitud inválido"})
+			return
+		}
+
+		if req.EventID <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "event_id es requerido"})
+			return
+		}
+
+		req.GroupName = strings.TrimSpace(req.GroupName)
+		if req.GroupName == "" {
+			req.GroupName = "Acceso Grupal"
+		}
+
+		if req.Quantity <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "la cantidad debe ser mayor a 0"})
+			return
+		}
+		if req.Quantity > 500 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "la cantidad máxima por lote es 500 pases"})
+			return
+		}
+
+		// Query event details and verify access
+		var organizerID int64
+		var eventName, imageURL, venueAddress, city, country, eventDate, doorsOpenTime, showTime, currency, ticketAdImageURL, privateType string
+		var courtesyQuota int
+		var isPrivate bool
+		err = db.QueryRow(`
+			SELECT organizer_id, name, COALESCE(image_url, ''), venue_address, city, country, 
+			       event_date, doors_open_time, show_start_time, currency, courtesy_quota, 
+			       COALESCE(is_private, false), COALESCE(private_type, 'interactivo'), COALESCE(ticket_ad_image_url, '')
+			FROM events 
+			WHERE id = $1
+		`, req.EventID).Scan(
+			&organizerID, &eventName, &imageURL, &venueAddress, &city, &country, 
+			&eventDate, &doorsOpenTime, &showTime, &currency, &courtesyQuota, 
+			&isPrivate, &privateType, &ticketAdImageURL,
+		)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "evento no encontrado"})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "error al consultar evento"})
+			return
+		}
+
+		hasPermission := user.Role == "administrador" || organizerID == user.ID
+		if !hasPermission && user.Role == "staff_invitaciones" {
+			var assignedCount int
+			_ = db.QueryRow("SELECT COUNT(*) FROM user_assigned_events WHERE user_id = $1 AND event_id = $2", user.ID, req.EventID).Scan(&assignedCount)
+			if assignedCount > 0 {
+				hasPermission = true
+			}
+		}
+		if !hasPermission {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "no tienes permiso para generar pases en este evento"})
+			return
+		}
+
+		tx, err := db.BeginTx(r.Context(), nil)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "error al iniciar transacción"})
+			return
+		}
+		defer tx.Rollback()
+
+		orderNumber := generateNextOrderNumber(db)
+
+		// Sanitize group name for placeholder email
+		cleanGroupSlug := strings.ToLower(strings.Map(func(r rune) rune {
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+				return r
+			}
+			return '-'
+		}, req.GroupName))
+		cleanGroupSlug = strings.Trim(cleanGroupSlug, "-")
+		if cleanGroupSlug == "" {
+			cleanGroupSlug = "grupo"
+		}
+		placeholderEmail := fmt.Sprintf("%s@grupos.roveni.local", cleanGroupSlug)
+
+		courtesyNote := fmt.Sprintf("Lote Grupal: %s (%d pases)", req.GroupName, req.Quantity)
+		if strings.TrimSpace(req.Note) != "" {
+			courtesyNote += " • " + strings.TrimSpace(req.Note)
+		}
+
+		var purchaseID int64
+		err = tx.QueryRow(`
+			INSERT INTO purchases (
+				order_number, event_id, customer_name, customer_email, customer_phone,
+				subtotal, service_fee, total_amount, subtotal_usd, service_fee_usd, total_amount_usd,
+				currency, event_currency, exchange_rate, stripe_payment_intent_id, status,
+				is_courtesy, courtesy_note, event_zone, rsvp_status
+			) VALUES (
+				$1, $2, $3, $4, '',
+				0.00, 0.00, 0.00, 0.00, 0.00, 0.00,
+				$5, $5, 1.0, 'GROUP_BATCH_PASS', 'completed',
+				true, $6, $7, 'confirmed'
+			) RETURNING id
+		`, orderNumber, req.EventID, req.GroupName, placeholderEmail, currency, courtesyNote, strings.TrimSpace(req.EventZone)).Scan(&purchaseID)
+
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("error al crear registro de orden grupal: %v", err)})
+			return
+		}
+
+		catName := "Acceso Grupal"
+		var cid *int64
+		if req.CategoryID > 0 {
+			_ = db.QueryRow("SELECT name FROM ticket_categories WHERE id = $1 AND event_id = $2", req.CategoryID, req.EventID).Scan(&catName)
+			cid = &req.CategoryID
+		}
+		if catName == "" || catName == "Acceso Grupal" {
+			if strings.TrimSpace(req.EventZone) != "" {
+				catName = fmt.Sprintf("Acceso Grupal - Zona %s", strings.TrimSpace(req.EventZone))
+			}
+		}
+
+		_, errItem := tx.Exec(`
+			INSERT INTO purchase_items (
+				purchase_id, ticket_category_id, ticket_name, price, price_usd, price_native,
+				quantity, seat_id, seat_label, event_zone
+			) VALUES (
+				$1, $2, $3, 0.00, 0.00, 0.00,
+				$4, NULL, '', $5
+			)
+		`, purchaseID, cid, catName, req.Quantity, strings.TrimSpace(req.EventZone))
+
+		if errItem != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("error al crear ítems de orden grupal: %v", errItem)})
+			return
+		}
+
+		if errCommit := tx.Commit(); errCommit != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "error al confirmar transacción"})
+			return
+		}
+
+		// Generar lista de tickets y pre-generar los PDFs individuales y combinados
+		var pdfTicketList []tickets.TicketPDFData
+		for q := 0; q < req.Quantity; q++ {
+			holderName := fmt.Sprintf("%s (Pase #%02d)", req.GroupName, q+1)
+			pdfTicketList = append(pdfTicketList, tickets.TicketPDFData{
+				OrderNumber:      orderNumber,
+				TicketSerial:     fmt.Sprintf("%s-%02d", orderNumber, q+1),
+				TicketIndex:      q + 1,
+				TotalTickets:     req.Quantity,
+				CategoryName:     catName,
+				CustomerName:     holderName,
+				CustomerEmail:    placeholderEmail,
+				Price:            0.00,
+				Currency:         currency,
+				EventZone:        strings.TrimSpace(req.EventZone),
+				IsCourtesy:       true,
+				IsPrivate:        isPrivate,
+				TicketDesignMode: "cortesia",
+				TicketAdImage:    ticketAdImageURL,
+			})
+		}
+
+		// Pre-generar los PDFs individuales en disco
+		_, _ = tickets.GenerateAllTicketsForOrder(
+			orderNumber, req.GroupName, placeholderEmail,
+			eventName, imageURL, venueAddress, city, country,
+			eventDate, doorsOpenTime, showTime, pdfTicketList,
+		)
+
+		// Pre-generar el archivo PDF combinado multi-página
+		outputDir := filepath.Join(".", "uploads", "tickets")
+		combinedPDFPath := filepath.Join(outputDir, fmt.Sprintf("%s_TODOS.pdf", orderNumber))
+		_, _ = tickets.GenerateCombinedTicketsPDF(pdfTicketList, combinedPDFPath)
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"success":          true,
+			"order_number":     orderNumber,
+			"purchase_id":      purchaseID,
+			"group_name":       req.GroupName,
+			"quantity":         req.Quantity,
+			"event_name":       eventName,
+			"event_zone":       strings.TrimSpace(req.EventZone),
+			"download_pdf_url": fmt.Sprintf("/public/tickets/download?order_number=%s", orderNumber),
+			"download_zip_url": fmt.Sprintf("/public/tickets/download-zip?order_number=%s", orderNumber),
+		})
+	}
+}
+
+// GetGroupTicketsListHandler lista todos los lotes de pases grupales generados para un evento específico
+func GetGroupTicketsListHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+			return
+		}
+
+		user, err := GetAuthenticatedUser(r, db, rdb)
+		if err != nil || user == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "sesión requerida"})
+			return
+		}
+
+		eventIDStr := r.URL.Query().Get("event_id")
+		eventID, _ := strconv.ParseInt(eventIDStr, 10, 64)
+		if eventID <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "event_id es requerido"})
+			return
+		}
+
+		var organizerID int64
+		err = db.QueryRow("SELECT organizer_id FROM events WHERE id = $1", eventID).Scan(&organizerID)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "evento no encontrado"})
+			return
+		}
+
+		hasPermission := user.Role == "administrador" || organizerID == user.ID
+		if !hasPermission && user.Role == "staff_invitaciones" {
+			var assignedCount int
+			_ = db.QueryRow("SELECT COUNT(*) FROM user_assigned_events WHERE user_id = $1 AND event_id = $2", user.ID, eventID).Scan(&assignedCount)
+			if assignedCount > 0 {
+				hasPermission = true
+			}
+		}
+		if !hasPermission {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "no tienes permiso para ver este evento"})
+			return
+		}
+
+		rows, err := db.Query(`
+			SELECT p.id, p.order_number, p.customer_name, COALESCE(SUM(pi.quantity), 0) as total_qty,
+			       COALESCE(p.event_zone, ''), COALESCE(p.courtesy_note, ''), p.created_at,
+			       (SELECT COUNT(*) FROM ticket_scans ts WHERE ts.order_number = p.order_number) as scanned_count
+			FROM purchases p
+			JOIN purchase_items pi ON pi.purchase_id = p.id
+			WHERE p.event_id = $1 AND p.stripe_payment_intent_id = 'GROUP_BATCH_PASS'
+			GROUP BY p.id, p.order_number, p.customer_name, p.event_zone, p.courtesy_note, p.created_at
+			ORDER BY p.created_at DESC
+		`, eventID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "error al consultar lotes grupales"})
+			return
+		}
+		defer rows.Close()
+
+		var batches []GroupBatchSummary
+		for rows.Next() {
+			var b GroupBatchSummary
+			if errScan := rows.Scan(&b.ID, &b.OrderNumber, &b.GroupName, &b.Quantity, &b.EventZone, &b.CourtesyNote, &b.CreatedAt, &b.ScannedCount); errScan == nil {
+				b.DownloadPDF = fmt.Sprintf("/public/tickets/download?order_number=%s", b.OrderNumber)
+				b.DownloadZip = fmt.Sprintf("/public/tickets/download-zip?order_number=%s", b.OrderNumber)
+				batches = append(batches, b)
+			}
+		}
+
+		if batches == nil {
+			batches = []GroupBatchSummary{}
+		}
+
+		writeJSON(w, http.StatusOK, batches)
 	}
 }

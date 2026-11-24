@@ -400,3 +400,85 @@ func GetMyTicketsHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, passes)
 	}
 }
+
+type AdminChangePasswordRequest struct {
+	UserID      int64  `json:"user_id"`
+	NewPassword string `json:"new_password"`
+}
+
+// AdminChangeUserPasswordHandler permite a los administradores actualizar la contraseña de cualquier usuario
+// y cierra/revoca de forma inmediata todas las sesiones activas asociadas a dicho usuario.
+func AdminChangeUserPasswordHandler(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+			return
+		}
+
+		caller, err := GetAuthenticatedUser(r, db, rdb)
+		if err != nil || caller == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "sesión inválida o no autenticado"})
+			return
+		}
+
+		if caller.Role != "administrador" {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "solo los administradores tienen permiso para modificar contraseñas"})
+			return
+		}
+
+		var req AdminChangePasswordRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cuerpo de solicitud inválido"})
+			return
+		}
+
+		if req.UserID <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ID de usuario inválido"})
+			return
+		}
+
+		trimmedPassword := strings.TrimSpace(req.NewPassword)
+		if len(trimmedPassword) < 6 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "la contraseña debe tener al menos 6 caracteres"})
+			return
+		}
+
+		var targetEmail, targetRole string
+		var targetFullName sql.NullString
+		err = db.QueryRow("SELECT email, role, full_name FROM users WHERE id = $1", req.UserID).Scan(&targetEmail, &targetRole, &targetFullName)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "usuario no encontrado"})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "error al consultar usuario"})
+			return
+		}
+
+		hash, err := bcrypt.GenerateFromPassword([]byte(trimmedPassword), bcrypt.DefaultCost)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "error al procesar contraseña"})
+			return
+		}
+
+		_, err = db.Exec("UPDATE users SET password_hash = $1 WHERE id = $2", string(hash), req.UserID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "error al actualizar contraseña en base de datos"})
+			return
+		}
+
+		// Cerrar todas las sesiones activas del usuario objetivo (Redis, RAM, DB)
+		_ = DeleteAllSessionsForUser(rdb, db, req.UserID)
+
+		isSelf := caller.ID == req.UserID
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"success":        true,
+			"message":        fmt.Sprintf("Contraseña actualizada exitosamente para %s. Todas sus sesiones activas han sido cerradas.", targetEmail),
+			"user_id":        req.UserID,
+			"email":          targetEmail,
+			"is_self":        isSelf,
+			"sessions_reset": true,
+		})
+	}
+}

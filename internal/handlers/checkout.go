@@ -11,6 +11,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -846,6 +847,24 @@ func DownloadTicketsPDFHandler(db *sql.DB) http.HandlerFunc {
 		if err != nil || len(pdfPaths) == 0 {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Error al generar archivo PDF de boletos"})
 			return
+		}
+
+		// If order has multiple tickets, stream combined multi-page PDF
+		if len(pdfTicketList) > 1 {
+			outputDir := filepath.Join(".", "uploads", "tickets")
+			combinedPDFPath := filepath.Join(outputDir, fmt.Sprintf("%s_TODOS.pdf", orderNumber))
+			if _, errStat := os.Stat(combinedPDFPath); os.IsNotExist(errStat) {
+				_, _ = tickets.GenerateCombinedTicketsPDF(pdfTicketList, combinedPDFPath)
+			}
+
+			if pdfBytes, errCombined := os.ReadFile(combinedPDFPath); errCombined == nil {
+				w.Header().Set("Content-Type", "application/pdf")
+				w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=\"Boletos_Roveni_%s_Completo.pdf\"", orderNumber))
+				w.Header().Set("Content-Length", fmt.Sprintf("%d", len(pdfBytes)))
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(pdfBytes)
+				return
+			}
 		}
 
 		// Stream the first generated ticket PDF file
