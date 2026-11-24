@@ -443,15 +443,23 @@ func AdminChangeUserPasswordHandler(db *sql.DB, rdb *redis.Client) http.HandlerF
 			return
 		}
 
-		var targetEmail, targetRole string
-		var targetFullName sql.NullString
-		err = db.QueryRow("SELECT email, role, full_name FROM users WHERE id = $1", req.UserID).Scan(&targetEmail, &targetRole, &targetFullName)
+		var targetEmail, targetRole, targetFullName string
+		err = db.QueryRow(`
+			SELECT 
+				u.email, 
+				u.role, 
+				COALESCE(op.full_name, cp.full_name, u.email)
+			FROM users u
+			LEFT JOIN organizer_profiles op ON op.user_id = u.id
+			LEFT JOIN customer_profiles cp ON cp.user_id = u.id
+			WHERE u.id = $1
+		`, req.UserID).Scan(&targetEmail, &targetRole, &targetFullName)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				writeJSON(w, http.StatusNotFound, map[string]string{"error": "usuario no encontrado"})
 				return
 			}
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "error al consultar usuario"})
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("error al consultar usuario: %v", err)})
 			return
 		}
 
